@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>闲逛 · 三国挂机 V1</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="boot">
+      <div class="boot-box">
+        <div class="boot-title">闲逛</div>
+        <div class="boot-text" id="boot-text">正在读取配置…</div>
+      </div>
+    </div>
+
+    <div id="app" hidden>
+      <header id="topbar">
+        <div class="brand">
+          <span class="brand-name">闲逛</span>
+          <span class="brand-sub" id="meta-line">—</span>
+        </div>
+        <div class="top-stats">
+          <span class="stat">完成任务 <b id="stat-tasks">0</b></span>
+          <span class="stat">回城 <b id="stat-returns">0</b></span>
+          <span class="stat">行走 <b id="stat-cells">0</b> 格</span>
+          <span class="stat dim">速度 <b id="stat-speed">20</b> 秒/格</span>
+        </div>
+      </header>
+
+      <main id="main">
+        <section id="map-pane">
+          <canvas id="map"></canvas>
+          <nav id="left-menu">
+            <button class="menu-item" id="menu-bag">
+              <span class="mi-ico">袋</span><span class="mi-txt">背包</span>
+            </button>
+            <button class="menu-item" id="menu-char">
+              <span class="mi-ico">将</span><span class="mi-txt">角色</span>
+            </button>
+          </nav>
+          <div class="map-overlay">
+            <div class="map-tools">
+              <button class="mini" id="btn-fit" title="适配窗口">适配</button>
+              <button class="mini" id="btn-zoomin">＋</button>
+              <button class="mini" id="btn-zoomout">－</button>
+            </div>
+            <div class="map-hint">滚轮缩放 · 拖动平移</div>
+          </div>
+        </section>
+
+        <aside id="side">
+          <section class="card" id="status-card">
+            <h2>当前状态</h2>
+            <div id="status-body"></div>
+          </section>
+
+          <section class="card" id="board-card">
+            <h2>
+              任务板
+              <span class="h2-actions">
+                <button class="mini" id="btn-autosort" title="贪心：每次选最近的">一键最优排序</button>
+              </span>
+            </h2>
+            <div id="task-board" class="task-board"></div>
+            <p class="tip">拖动卡片可改变顺序（队首已锁定）· 完成的任务出列，180 秒后新任务补到队尾</p>
+          </section>
+
+          <section class="card" id="ctrl-card">
+            <h2>调试 / 存档</h2>
+            <div id="ctrl-body"></div>
+            <h2 style="margin-top:12px">旅途日志</h2>
+            <div id="log-body" class="log"></div>
+          </section>
+
+          <section class="card" id="check-card">
+            <h2>配置与路网自检</h2>
+            <div id="check-body"></div>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <div id="modal-wrap" hidden>
+      <div id="modal" role="dialog" aria-modal="true">
+        <header>
+          <h3 id="modal-title">—</h3>
+          <button class="mini" id="modal-close" title="关闭">✕</button>
+        </header>
+        <div id="modal-body"></div>
+      </div>
+    </div>
+
+    <div id="toast-wrap"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

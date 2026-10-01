@@ -1,0 +1,22 @@
+{
+  "name": "sanwalk",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "闲逛 · 三国题材地图挂机游戏 V1（纯前端）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check": "esbuild tools/check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/check.cjs --log-level=warning && node node_modules/.sanwalk/check.cjs"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
