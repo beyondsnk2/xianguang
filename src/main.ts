@@ -1,7 +1,7 @@
 import { loadGameConfig } from './config/loader';
 import { buildGraph, type Graph } from './game/graph';
 import { buildTaskIndex, type TaskIndex } from './game/taskGen';
-import { createInitialState, normalizeSlots, pushLog, storageItemCount } from './game/state';
+import { createInitialState, ensureRuntimeFields, normalizeSlots, pushLog, storageItemCount } from './game/state';
 import { syncPhase, tick, type TickCtx } from './game/tick';
 import { loadState, saveState, clearSave, TabLeader } from './game/save';
 import { runSelfCheck } from './game/selfcheck';
@@ -14,10 +14,18 @@ import {
   renderCharacter,
   renderCheck,
   renderControls,
-  renderLog,
-  renderStatus,
+  renderEvents,
+  renderFeed,
+  renderRelations,
+  renderTaskbar,
+  renderTopStats,
+  relView,
+  floatReward,
   toast,
 } from './ui/panels';
+import type { EventResult } from './game/event';
+import { eventWatermark } from './game/events';
+import { resolveEvent } from './game/event';
 import { fmtDur } from './ui/format';
 
 const el = <T extends HTMLElement>(id: string): T => {
@@ -45,13 +53,23 @@ async function boot(): Promise<void> {
   const taskIndex: TaskIndex = buildTaskIndex(cfg);
   const ctx: TickCtx = { cfg, graph, taskIndex };
 
-  let state: GameState = loadState() ?? createInitialState(cfg, Date.now());
+  // 存档只要不是当前配置的（含没有 cfgKey 的老存档），直接删除并重开，不做兼容迁移
+  const cfgKey = `${cfg.meta.setName}_V${cfg.meta.version}`;
+  const oldSave = loadState();
+  let state: GameState = oldSave ?? createInitialState(cfg, Date.now());
+  if (oldSave && oldSave.cfgKey !== cfgKey) {
+    clearSave();
+    state = createInitialState(cfg, Date.now());
+    pushLog(state, `配置切换到 ${cfgKey}，旧存档已丢弃`);
+    toast(`配置已切换为 ${cfgKey}，旧存档已删除并重新开局`, 6000);
+  }
   // 配置槽位数变化时的最小迁移
   if (state.slots.length !== cfg.values.initTaskListSlot) {
     while (state.slots.length > cfg.values.initTaskListSlot) state.slots.pop();
     while (state.slots.length < cfg.values.initTaskListSlot) state.slots.push({ kind: 'empty', refillIn: 0 });
   }
   if (!state.log) state.log = [];
+  ensureRuntimeFields(state, cfg); // 补齐 V2 字段（技能/好感/图纸/统计口径）
   normalizeSlots(state); // 老存档可能把空槽留在列表中段，读档时归位到队尾
 
   // ── 离线结算：本地时间戳 + 离散事件推进 + 上限 8 小时 ──
@@ -79,6 +97,7 @@ async function boot(): Promise<void> {
 
   // ── 界面装配 ──
   const renderer = new MapRenderer(el<HTMLCanvasElement>('map'));
+  renderer.setMapSize(graph.bounds.w, graph.bounds.h); // 地图尺寸由配置推导
   renderer.fit();
 
   const board = new TaskBoard(el('task-board'), {
@@ -139,42 +158,184 @@ async function boot(): Promise<void> {
     });
   }
 
-  // ── 左侧菜单弹窗：背包 / 角色 ──
-  let openModalKind: 'bag' | 'char' | null = null;
-  function renderModal(): void {
-    if (!openModalKind) return;
-    if (openModalKind === 'bag') renderBag(el('modal-body'), state, cfg);
-    else renderCharacter(el('modal-body'), state, cfg);
+  // ── 左侧菜单弹窗：背包 / 角色 / 关系 ──
+  let openModalKind: 'bag' | 'char' | 'rel' | 'event' | null = null;
+  let seenSeq = 0; // 已读事件水位（离线结算后对齐，避免刷屏）
+  let relBadge = false; // 关系面板是否有未读的初识/升阶
+  /** 最近一次事件结算结果：面板内渲染"结果卡"，约 2.6 秒后自动移除 */
+  let lastEventResult: EventResult | null = null;
+
+  /** 左菜单「事件」角标显示待处理条数（比单纯红点信息量更大） */
+  function syncEventBadge(): void {
+    const dot = el('menu-event').querySelector('.mi-dot') as HTMLElement | null;
+    const n = state.pending.length;
+    if (dot) {
+      dot.textContent = String(n);
+      dot.hidden = n === 0;
+    }
   }
-  function openModal(kind: 'bag' | 'char'): void {
+  const menuButtons = ['menu-bag', 'menu-char', 'menu-rel', 'menu-event'] as const;
+  function syncMenuActive(): void {
+    const activeTag =
+      openModalKind === 'bag'
+        ? 'menu-bag'
+        : openModalKind === 'char'
+          ? 'menu-char'
+          : openModalKind === 'rel'
+            ? 'menu-rel'
+            : openModalKind === 'event'
+              ? 'menu-event'
+              : null;
+    for (const id of menuButtons) el(id).classList.toggle('active', id === activeTag);
+  }
+  function renderModal(force = false): void {
+    if (!openModalKind) return;
+    const body = el('modal-body');
+    // 周期性刷新时，若焦点落在弹窗内的可交互控件（如下拉框）上则跳过，避免重建打断选择
+    if (!force) {
+      const ae = document.activeElement;
+      if (ae && ae !== body && body.contains(ae)) return;
+    }
+    if (openModalKind === 'bag') renderBag(body, state, cfg);
+    else if (openModalKind === 'char') renderCharacter(body, state, cfg);
+    else if (openModalKind === 'rel') renderRelations(body, state, cfg);
+    else renderEvents(body, state, cfg, lastEventResult);
+  }
+  function openModal(kind: 'bag' | 'char' | 'rel' | 'event'): void {
     openModalKind = kind;
-    el('modal-title').textContent = kind === 'bag' ? '背包 / 仓库' : '角色信息';
+    el('modal-title').textContent =
+      kind === 'bag'
+        ? '背包 / 仓库'
+        : kind === 'char'
+          ? '角色信息'
+          : kind === 'rel'
+            ? '关系 / 人物'
+            : '事件';
+    el('modal').classList.toggle('wide', kind === 'rel' || kind === 'event');
+    if (kind === 'rel') {
+      relBadge = false;
+      el('menu-rel').classList.remove('has-dot');
+    }
+    if (kind === 'event') syncEventBadge();
     (el('modal-wrap') as HTMLElement).hidden = false;
-    renderModal();
+    syncMenuActive();
+    renderModal(true);
   }
   function closeModal(): void {
     openModalKind = null;
     (el('modal-wrap') as HTMLElement).hidden = true;
+    syncMenuActive();
   }
   el('menu-bag').addEventListener('click', () => openModal('bag'));
   el('menu-char').addEventListener('click', () => openModal('char'));
+  el('menu-rel').addEventListener('click', () => openModal('rel'));
+  el('menu-event').addEventListener('click', () => openModal('event'));
+  // 顶栏「事件」胶囊 → 直达事件列表（触发提示的一屏入口）
+  el('top-stats').addEventListener('click', (ev) => {
+    if ((ev.target as HTMLElement).closest('[data-open="event"]')) openModal('event');
+  });
   el('modal-close').addEventListener('click', closeModal);
   el('modal-wrap').addEventListener('click', (ev) => {
     if (ev.target === el('modal-wrap')) closeModal(); // 点遮罩关闭
+  });
+
+  // ── 关系面板的事件委托（modal-body 内容每 250ms 重渲染，故监听挂在持久节点上） ──
+  const modalBody = el('modal-body');
+  modalBody.addEventListener('change', (ev) => {
+    const sel = ev.target as HTMLSelectElement;
+    if (sel.id === 'rel-target') {
+      state.target = sel.value || null;
+      renderModal(true);
+    } else if (sel.id === 'ambition-select') {
+      state.ambition = sel.value as GameState['ambition'];
+      renderModal(true);
+      refreshUI();
+    } else if (sel.id === 'pace-select') {
+      state.pace = sel.value as GameState['pace'];
+      renderModal(true);
+      refreshUI();
+    }
+  });
+  modalBody.addEventListener('click', (ev) => {
+    const t = ev.target as HTMLElement;
+    // 随机事件：选择后直接结算（无小游戏）
+    const evAct = t.closest('[data-ev-act]');
+    if (evAct) {
+      const id = Number(evAct.getAttribute('data-ev-act'));
+      const optAttr = evAct.getAttribute('data-ev-opt');
+      const opt = optAttr == null ? undefined : Number(optAttr);
+      if (Number.isFinite(id)) {
+        const res = resolveEvent(state, cfg, id, opt);
+        if (res) {
+          lastEventResult = res;
+          // 稀有 / 传说额外飘字，放大惊喜；普通事件只走面板结果卡（不打扰）
+          // 属性经验变化在结果卡内以经验条 + 增长动画呈现（见 renderResultCard）
+          if (res.rarity >= 1) floatReward(res.lines, res.rarity);
+        }
+        renderModal(true);
+        refreshUI();
+      }
+      return;
+    }
+    const btn = t.closest('[data-rel-target]');
+    if (btn) {
+      const v = btn.getAttribute('data-rel-target');
+      state.target = v ? v : null;
+      renderModal(true);
+      return;
+    }
+    // 关系面板的筛选 / 排序
+    const fac = t.closest('[data-rel-faction]');
+    if (fac) {
+      relView.faction = (fac.getAttribute('data-rel-faction') as typeof relView.faction) ?? 'all';
+      renderModal(true);
+      return;
+    }
+    const met = t.closest('[data-rel-met]');
+    if (met) {
+      relView.met = (met.getAttribute('data-rel-met') as typeof relView.met) ?? 'all';
+      renderModal(true);
+      return;
+    }
+    const sort = t.closest('[data-rel-sort]');
+    if (sort) {
+      relView.sort = (sort.getAttribute('data-rel-sort') as typeof relView.sort) ?? 'favor';
+      renderModal(true);
+    }
   });
   window.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') closeModal();
   });
 
   function refreshUI(): void {
-    renderStatus(el('status-body'), state, cfg);
+    // 结果卡只停留约 2.6 秒
+    if (lastEventResult && Date.now() - lastEventResult.at > 2600) lastEventResult = null;
+    renderTaskbar(el('taskbar'), state, cfg);
+    renderTopStats(el('top-stats'), state, cfg, speed);
     renderModal();
-    renderLog(el('log-body'), state);
+    renderFeed(el('feed-body'), state);
     board.update(state, cfg, graph);
-    el('stat-tasks').textContent = String(state.stats.tasksDone);
-    el('stat-returns').textContent = String(state.stats.returnTrips);
-    el('stat-cells').textContent = String(state.stats.cellsWalked);
-    el('stat-speed').textContent = String(cfg.values.speed);
+    syncEventBadge();
+    drainEvents();
+  }
+
+  /**
+   * 事件流 → toast 的闸门：只对「未读且稀有/传说」的事件弹提示。
+   * seenSeq 在离线结算完成后对齐，因此离线期间堆积的事件只进流、不刷屏。
+   */
+  function drainEvents(): void {
+    const events = Array.isArray(state.events) ? state.events : [];
+    const fresh = events.filter((e) => e.seq > seenSeq);
+    // 高倍速下事件会成批到达：此时只弹「传说」级，避免刷屏（其余仍完整进事件流）
+    const toastFloor = fresh.length > 6 ? 2 : 1;
+    let maxSeq = seenSeq;
+    for (const e of fresh) {
+      maxSeq = Math.max(maxSeq, e.seq);
+      if (e.rarity >= toastFloor) toast(e.text, e.rarity >= 2 ? 7000 : 5200);
+      if (e.kind === 'meet' || e.kind === 'favor') relBadge = true; // 左菜单红点
+    }
+    seenSeq = maxSeq;
+    el('menu-rel').classList.toggle('has-dot', relBadge);
   }
 
   el('btn-autosort').addEventListener('click', () => {
@@ -249,6 +410,10 @@ async function boot(): Promise<void> {
     }
   });
 
+  // 离线结算产生的事件只进事件流，不弹 toast（对齐已读水位）
+  seenSeq = eventWatermark(state);
+  // 离线结算已完成；此后为在线推进 → 随机事件开始累积（离线冻结）
+  ctx.online = true;
   refreshControls();
   refreshUI();
   el('boot').hidden = true;

@@ -3,13 +3,19 @@ import {
   ATTR_KEYS,
   type AttrKey,
   type AttrLvRow,
+  type BlueprintDef,
   type Cell,
   type CityDef,
+  type CityLinkDef,
   type ConfigMeta,
   type GameConfig,
+  type ItemDef,
   type MapNodeDef,
   type MapRoadDef,
   type Range,
+  type RecipeDef,
+  type SkillDef,
+  type StateDef,
   type TaskDef,
 } from '../game/types';
 
@@ -45,6 +51,18 @@ function parseRange(v: CellVal): Range | null {
   const min = Math.min(parts[0], parts[1]);
   const max = Math.max(parts[0], parts[1]);
   return { min, max };
+}
+
+/** '0.0/0.3/0.6/1.0' → [0, 0.3, 0.6, 1]（评价四档增量） */
+function parseEvalInc(v: CellVal): number[] {
+  const parts = asStr(v).split('/').map((s) => Number(s.trim()));
+  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return [];
+  return parts;
+}
+
+/** 'jingtie_4' → 'jingtie'（取物品品质子族） */
+function subOf(tag: string): string {
+  return tag.replace(/_\d+$/, '');
 }
 
 /** '8:9' → {x:8,y:9} */
@@ -163,6 +181,14 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     getItemNum: parseRange(r['getItemNum']),
     getAttrXp: (asStr(r['getAttrXp']) as AttrKey) || null,
     getAttrXpNum: parseRange(r['getAttrXpNum']),
+    cls: asStr(r['cls']) || '',
+    skill: asStr(r['skill']),
+    quality: asNum(r['quality'], 0),
+    attrBaseline: asNum(r['attrBaseline'], 0),
+    pinjie: asNum(r['pinjie'], 0),
+    evalInc: parseEvalInc(r['evalInc']),
+    mainOutput: asStr(r['mainOutput']),
+    subOutput: asStr(r['subOutput']),
   })).filter((t) => t.tag);
 
   // city
@@ -170,7 +196,18 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     tag: asStr(r['tag']),
     name: asStr(r['name']),
     taskTypes: splitList(r['taskType']),
+    state: asStr(r['state']) || null,
   })).filter((c) => c.tag);
+
+  // state（V3 起：州定义 + 城块色；旧配置无此表 → 空数组）
+  const states: StateDef[] = (tables['state'] ?? [])
+    .map((r) => ({ tag: asStr(r['tag']), name: asStr(r['name']), color: asStr(r['color']) }))
+    .filter((s) => s.tag && /^#[0-9a-fA-F]{6}$/.test(s.color));
+  const stateByTag: Record<string, StateDef> = {};
+  for (const s of states) stateByTag[s.tag] = s;
+  for (const c of cities) {
+    if (c.state && !stateByTag[c.state]) warnings.push(`city ${c.tag} 的 state=${c.state} 不存在于 state 表`);
+  }
 
   // mapNode
   const nodes: MapNodeDef[] = (tables['mapNode'] ?? []).map((r) => ({
@@ -194,10 +231,136 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   // attrLv
   const attrLv: AttrLvRow[] = (tables['attrLv'] ?? [])
     .map((r) => ({ lv: asNum(r['lv'], NaN), num: asNum(r['num'], NaN) }))
-    .filter((r) => Number.isFinite(r.lv) && Number.isFinite(r.num));
-  const needByLv: (number | null)[] = [null];
+    .filter((r) => Number.isFinite(r.lv) && Number.isFinite(r.num));  const needByLv: (number | null)[] = [null];
   for (const row of attrLv) needByLv[row.lv] = row.num;
   const attrLvNeed = (lv: number): number | null => needByLv[lv] ?? null;
+
+  const cityByTagEarly: Record<string, CityDef> = {};
+  for (const c of cities) cityByTagEarly[c.tag] = c;
+  const cityByName: Record<string, CityDef> = {};
+  for (const c of cities) if (c.name) cityByName[c.name] = c;
+  const cityTagOfName = (name: string): string | null =>
+    cityByName[name]?.tag ?? (cityByTagEarly[name] ? name : null);
+
+  // cityLink（V3 起：城际连通 + dist；V1/V2 无此表 → 空数组）
+  const links: CityLinkDef[] = (tables['cityLink'] ?? [])
+    .map((r) => ({
+      tagA: asStr(r['tagA']),
+      tagB: asStr(r['tagB']),
+      dist: asNum(r['dist'], NaN),
+    }))
+    .filter((l) => l.tagA && l.tagB && Number.isFinite(l.dist) && l.dist > 0);
+  for (const l of links) {
+    if (!cityByTagEarly[l.tagA]) warnings.push(`cityLink 的 tagA=${l.tagA} 不存在于 city 表`);
+    if (!cityByTagEarly[l.tagB]) warnings.push(`cityLink 的 tagB=${l.tagB} 不存在于 city 表`);
+    if (l.tagA === l.tagB) warnings.push(`cityLink 自环：${l.tagA}`);
+  }
+  {
+    const seen = new Set<string>();
+    for (const l of links) {
+      const k = l.tagA < l.tagB ? l.tagA + '|' + l.tagB : l.tagB + '|' + l.tagA;
+      if (seen.has(k)) warnings.push(`cityLink 重复：${l.tagA}-${l.tagB}`);
+      seen.add(k);
+    }
+  }
+
+  // skill（V2：9 技能 × A/B/C）
+  const skillDefs: SkillDef[] = (tables['skill'] ?? []).map((r) => ({
+    tag: asStr(r['tag']),
+    name: asStr(r['name']),
+    cls: asStr(r['cls']),
+    mainNode: asStr(r['mainNode']),
+    nodeName: asStr(r['nodeName']),
+    pointCities: asStr(r['pointCities']),
+    note: asStr(r['note']),
+  })).filter((s) => s.tag);
+
+  // item（材料 27 / 稀有 54 / 成品 315 / 名品 3）
+  const items: ItemDef[] = (tables['item'] ?? []).map((r) => {
+    const tierRaw = asStr(r['tier']);
+    return {
+      tag: asStr(r['tag']),
+      name: asStr(r['name']),
+      cat: asStr(r['cat']),
+      subCat: asStr(r['subCat']),
+      tier: asNum(r['tier'], NaN),
+      tierRaw,
+      qMin: asNum(r['qMin'], 0),
+      qMax: asNum(r['qMax'], 0),
+      stack: asNum(r['stack'], 0),
+      source: asStr(r['source']),
+      note: asStr(r['note']),
+    };
+  }).filter((i) => i.tag);
+
+  // recipe（35 制造族 × 9 品质 = 315）
+  const recipes: RecipeDef[] = (tables['recipe'] ?? []).map((r) => {
+    const cityCraft = asStr(r['cityCraft']);
+    const cityRare = asStr(r['cityRare']);
+    const cityBlueprint = asStr(r['cityBlueprint']);
+    return {
+      tag: asStr(r['tag']),
+      name: asStr(r['name']),
+      skill: asStr(r['skill']),
+      quality: asNum(r['quality'], 0),
+      needItem1: asStr(r['needItem1']),
+      needItem1Num: asNum(r['needItem1Num'], 0),
+      matQualityFloor: asNum(r['matQualityFloor'], 0),
+      needRare: asStr(r['needRare']),
+      needBlueprint: asStr(r['needBlueprint']),
+      resultItem: asStr(r['resultItem']),
+      resultNum: asNum(r['resultNum'], 0),
+      cityCraft,
+      cityRare,
+      cityBlueprint,
+      cityCraftTag: cityTagOfName(cityCraft),
+      cityRareTag: cityTagOfName(cityRare),
+      cityBlueprintTag: cityTagOfName(cityBlueprint),
+      note: asStr(r['note']),
+    };
+  }).filter((r) => r.tag);
+
+  // blueprint（只由 C 类产出）
+  const blueprints: BlueprintDef[] = (tables['blueprint'] ?? []).map((r) => ({
+    tag: asStr(r['tag']),
+    name: asStr(r['name']),
+    fromSkill: asStr(r['fromSkill']),
+    note: asStr(r['note']),
+  })).filter((b) => b.tag);
+
+  const skillByTag: Record<string, SkillDef> = {};
+  for (const s of skillDefs) skillByTag[s.tag] = s;
+  const itemByTag: Record<string, ItemDef> = {};
+  for (const i of items) itemByTag[i.tag] = i;
+  const recipeByTag: Record<string, RecipeDef> = {};
+  const recipeByResult: Record<string, RecipeDef> = {};
+  for (const r of recipes) {
+    recipeByTag[r.tag] = r;
+    if (r.resultItem) recipeByResult[r.resultItem] = r;
+  }
+  const blueprintByTag: Record<string, BlueprintDef> = {};
+  for (const b of blueprints) blueprintByTag[b.tag] = b;
+
+  /**
+   * C 类技能 → 可产出稀有料 subCat：由「图纸 → 它锁的 B 制造族 → 该族配方用到的稀有料」反推。
+   * 数据实到这里出来：sworn→smithing→精铁/玄铁；visiting→alchemy→朱砂/百年参/雪莲；envoy→crafting→蚕丝/龙纹玉/犀角/南药。
+   */
+  const rareSubCatBySkill: Record<string, string[]> = {};
+  for (const bp of blueprints) {
+    if (!bp.fromSkill) continue;
+    const set = new Set<string>();
+    const skillsGated = new Set<string>();
+    for (const r of recipes) {
+      if (r.needBlueprint !== bp.tag) continue;
+      skillsGated.add(r.skill);
+      if (r.needRare) set.add(subOf(r.needRare));
+    }
+    for (const r of recipes) {
+      if (!skillsGated.has(r.skill) || !r.needRare) continue;
+      set.add(subOf(r.needRare));
+    }
+    rareSubCatBySkill[bp.fromSkill] = [...set].sort();
+  }
 
   // config
   const rawCfg: Record<string, CellVal> = {};
@@ -236,12 +399,27 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     taskByTag,
     cities,
     cityByTag,
+    cityByName,
     nodes,
     nodeByTag,
     roads,
+    links,
+    states,
+    stateByTag,
+    mapBgImg: asStr(rawCfg['mapBgImg']) || null,
     attrLv,
     attrLvNeed,
     values,
+    skillDefs,
+    skillByTag,
+    items,
+    itemByTag,
+    recipes,
+    recipeByTag,
+    recipeByResult,
+    blueprints,
+    blueprintByTag,
+    rareSubCatBySkill,
   };
 
   // ── 校验 ──
@@ -251,8 +429,8 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   if (!roads.length) warnings.push('mapRoad 表为空');
   for (const t of tasks) {
     const citiesHave = cities.filter((c) => c.taskTypes.includes(t.nodeType));
-    if (citiesHave.length !== 2) {
-      warnings.push(`任务 ${t.tag}(${t.name}) 的设施 ${t.nodeType} 命中 ${citiesHave.length} 座城，预期 2 座`);
+    if (citiesHave.length < 1) {
+      warnings.push(`任务 ${t.tag}(${t.name}) 的设施 ${t.nodeType} 未命中任何城市`);
     }
     for (const c of citiesHave) {
       const hit = nodes.filter((n) => n.belong === c.tag && n.name === t.nodeType);
@@ -267,6 +445,71 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     if (!cityByTag[tag]) warnings.push(`startCityRand 中的 ${tag} 不存在于 city 表`);
   }
   for (const key of ATTR_KEYS) void key;
+
+  // ── V2 红线校验（仅在配置了 skill/item/recipe 表时生效，V1 配置直接跳过） ──
+  if (skillDefs.length) {
+    const agg = (title: string, bad: string[], hint = ''): void => {
+      if (!bad.length) return;
+      warnings.push(`${title}：${bad.length} 条${hint ? `（${hint}）` : ''} · 示例 ${bad.slice(0, 3).join('、')}`);
+    };
+
+    // ① 图纸只能由 C 类技能产出（C 是 B 的前置，不可跳过）
+    agg(
+      '红线①/② 图纸来源非 C 类技能',
+      blueprints.filter((b) => skillByTag[b.fromSkill]?.cls !== 'C').map((b) => `${b.tag}←${b.fromSkill || '(空)'}`),
+    );
+
+    // ① 稀有材料只有 C 类能给：来源标注必须是 C类独占，且能被某个 C 技能的产出集合覆盖
+    const rares = items.filter((i) => i.cat === '稀有');
+    agg(
+      '红线① 稀有材料来源标注异常',
+      rares.filter((i) => i.source !== 'C类独占').map((i) => `${i.tag}:${i.source || '(空)'}`),
+    );
+    const covered = new Set<string>();
+    for (const subs of Object.values(rareSubCatBySkill)) for (const s of subs) covered.add(s);
+    agg('红线① 稀有材料无 C 类产出源', rares.filter((i) => !covered.has(i.subCat)).map((i) => i.tag));
+
+    // ⑥ 稀有材料的产出品质下界 ≥ 4
+    agg('红线⑥ 稀有材料品质下界 < 4', rares.filter((i) => i.qMin < 4).map((i) => `${i.tag}(q${i.qMin})`));
+
+    // ③ 高阶配方的「图纸城 / 材料A城 / 材料B城」三城必须互异，且图纸城不能缺
+    const missingBpCity: string[] = [];
+    const notDistinct: string[] = [];
+    for (const r of recipes) {
+      if (r.needBlueprint && !r.cityBlueprintTag) missingBpCity.push(`${r.tag} 需 ${r.needBlueprint} 但 cityBlueprint 为空`);
+      const trio = [r.cityCraftTag, r.cityRareTag, r.cityBlueprintTag].filter(Boolean) as string[];
+      if (trio.length === 3 && new Set(trio).size < 3) notDistinct.push(`${r.tag}: ${trio.join('/')}`);
+    }
+    agg('红线③ 配方未登记图纸城', missingBpCity);
+    agg('红线③ 配方三城不互异', notDistinct);
+
+    // ④/⑤ 投喂铁律：n 品制造只吃 q≥n 的材料
+    agg(
+      '红线④/⑤ matQualityFloor < 配方品质',
+      recipes
+        .filter((r) => r.matQualityFloor < r.quality)
+        .map((r) => `${r.tag}(q${r.quality}/floor${r.matQualityFloor})`),
+    );
+
+    // 任务基型必须铺满 9 技能 × 9 品质，且每格唯一（滑动窗口依赖该前提）
+    const combos = new Map<string, number>();
+    for (const t of tasks) {
+      if (!t.skill || !t.quality) continue;
+      const key = `${t.skill}|${t.quality}`;
+      combos.set(key, (combos.get(key) ?? 0) + 1);
+    }
+    const dupes = [...combos.entries()].filter(([, n]) => n > 1).map(([k]) => k);
+    const missing: string[] = [];
+    for (const s of skillDefs) for (let q = 1; q <= 9; q++) if (!combos.has(`${s.tag}|${q}`)) missing.push(`${s.tag}|q${q}`);
+    agg('滑动窗口 任务基型重复', dupes);
+    agg('滑动窗口 任务基型缺失（应为 9 技能 × 9 品质）', missing);
+
+    // 运行时保障：A 类任务的产出若是稀有材料，会直接破坏「A 供量 / C 供质」
+    agg(
+      '红线① A 类任务产出稀有材料',
+      tasks.filter((t) => t.cls === 'A' && itemByTag[t.mainOutput]?.cat === '稀有').map((t) => t.tag),
+    );
+  }
 
   return { config, warnings };
 }

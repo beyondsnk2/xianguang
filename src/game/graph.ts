@@ -21,8 +21,10 @@ export interface Graph {
   nodeOfCell: number[];
   adj: number[][];
   cost: number[][];
-  /** 节点级邻接（用于核对「96 点 97 边」） */
+  /** 节点级邻接（用于核对图规模） */
   nodeAdj: Set<number>[];
+  /** 地图实际占地（由配置推导，V2 起不再写死 36×30） */
+  bounds: { w: number; h: number };
 }
 
 /** roadType → 每格移动成本（沿用开发文档：预留扩展，现全为 plain） */
@@ -47,6 +49,8 @@ export function buildGraph(cfg: GameConfig): Graph {
   const cellIdByKey = new Map<number, number>();
   const nodeOfCell: number[] = [];
   const roadCostOfCell: number[] = [];
+  const roadTypeByTag = new Map<number, string>();
+  for (const r of cfg.roads) roadTypeByTag.set(r.tag, r.roadType ?? 'plain');
   nodes.forEach((node, nodeId) => {
     for (const c of node.cells) {
       const k = cellKey(c);
@@ -55,7 +59,9 @@ export function buildGraph(cfg: GameConfig): Graph {
       cells.push(c);
       cellIdByKey.set(k, id);
       nodeOfCell.push(nodeId);
-      roadCostOfCell.push(node.kind === 'road' ? (ROAD_TYPE_COST[roadTypeOf(cfg, node.tag)] ?? DEFAULT_ROAD_COST) : DEFAULT_ROAD_COST);
+      roadCostOfCell.push(
+        node.kind === 'road' ? (ROAD_TYPE_COST[roadTypeByTag.get(node.tag) ?? 'plain'] ?? DEFAULT_ROAD_COST) : DEFAULT_ROAD_COST,
+      );
     }
   });
 
@@ -63,6 +69,7 @@ export function buildGraph(cfg: GameConfig): Graph {
   const adj: number[][] = cells.map(() => []);
   const cost: number[][] = cells.map(() => []);
   const nodeAdj: Set<number>[] = nodes.map(() => new Set<number>());
+  const bounds = { w: Math.max(1, ...cells.map((c) => c.x + 1)), h: Math.max(1, ...cells.map((c) => c.y + 1)) };
   const dirs = [
     [1, 0],
     [-1, 0],
@@ -92,12 +99,7 @@ export function buildGraph(cfg: GameConfig): Graph {
     else roadByTag.set(n.tag, n);
   }
 
-  return { nodes, nodeByTag, roadByTag, cells, cellIdByKey, nodeOfCell, adj, cost, nodeAdj };
-}
-
-function roadTypeOf(cfg: GameConfig, roadTag: number): string {
-  const r = cfg.roads.find((x) => x.tag === roadTag);
-  return r?.roadType ?? 'plain';
+  return { nodes, nodeByTag, roadByTag, cells, cellIdByKey, nodeOfCell, adj, cost, nodeAdj, bounds };
 }
 
 export interface PathResult {

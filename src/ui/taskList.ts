@@ -1,4 +1,4 @@
-import { ATTR_NAMES, type Cell, type GameConfig, type GameState } from '../game/types';
+import { type Cell, type GameConfig, type GameState } from '../game/types';
 import { pathToNode } from '../game/graph';
 import type { Graph } from '../game/graph';
 import { fmtDur, itemName } from './format';
@@ -45,6 +45,7 @@ export class TaskBoard {
     // 依次估算路程：从当前位置出发，接着以上一个任务点为起点
     let cursor: Cell = { ...state.cell };
     const speed = cfg.values.speed;
+    let totalSec = 0; // 当前列表所有任务（含赶路 + 作业）的合计时长
 
     for (let i = 0; i < n; i++) {
       const slot = state.slots[i];
@@ -76,42 +77,58 @@ export class TaskBoard {
       const node = cfg.nodeByTag[task.nodeTag];
       const cityName = cfg.cityByTag[task.cityTag]?.name ?? task.cityTag;
       const locked = state.currentTaskId === task.id;
-      const yieldText = def
-        ? def.getItem
-          ? `${itemName(def.getItem)} × ${def.getItemNum?.min ?? 0}~${def.getItemNum?.max ?? 0}`
-          : `${def.getAttrXp ? ATTR_NAMES[def.getAttrXp] : ''}经验 ${def.getAttrXpNum?.min ?? 0}~${def.getAttrXpNum?.max ?? 0}`
-        : '';
+      // 产物口径走 V2 的 mainOutput + 类别语义（A 给量 / B 给成品 / C 给关系与稀有物）
+      const clsChar = def?.cls === 'A' ? '采' : def?.cls === 'B' ? '制' : def?.cls === 'C' ? '人' : '';
+      const outTag = def?.mainOutput || def?.getItem || '';
+      let yieldText = '';
+      if (def?.cls === 'C') {
+        yieldText = '好感 · 稀有 · 图纸';
+      } else if (outTag) {
+        const range = def.getItemNum ? `${def.getItemNum.min}~${def.getItemNum.max}` : '';
+        yieldText =
+          def.cls === 'B'
+            ? `成品 ${itemName(outTag, cfg)}`
+            : `${itemName(outTag, cfg)}${range ? ` ×${range}` : ''}`;
+      }
 
       titleEl.innerHTML =
+        `<span class="cls-tag">${clsChar}</span>` +
         `<span class="city">${cityName}</span> · ${def?.nodeName ?? node?.name ?? ''} · ${def?.name ?? task.taskTag}`;
       rightEl.innerHTML = `<b>${yieldText}</b>`;
+      const qPrefix = def && def.quality > 0 ? `品质${def.quality} · ` : '';
+
+      // 统一计算该任务的"赶路 + 作业"时长，并沿路径推进光标（队首也计入）
+      const p = pathToNode(graph, cursor, task.nodeTag);
+      const dist = p?.cost ?? 0;
+      const travelSec = dist * speed;
+      totalSec += travelSec + task.needTime;
+      if (p && p.cells.length) cursor = { ...p.cells[p.cells.length - 1] };
 
       if (locked) {
         el.classList.add('locked');
         el.draggable = false;
-        const p = state.phase;
-        if (p.kind === 'moving') {
-          subEl.textContent = `赶路中 · 剩余 ${Math.ceil(p.remain / speed)} 格 / ${fmtDur(p.remain)}`;
+        const ph = state.phase;
+        if (ph.kind === 'moving') {
+          subEl.textContent = `${qPrefix}赶路中 · 剩余 ${Math.ceil(ph.remain / speed)} 格 / ${fmtDur(ph.remain)}`;
           progEl.style.display = 'block';
-          progBar.style.width = `${p.total > 0 ? (1 - p.remain / p.total) * 100 : 100}%`;
-        } else if (p.kind === 'working') {
-          subEl.textContent = `作业中 · ${p.label} 剩余 ${fmtDur(p.remain)}`;
+          progBar.style.width = `${ph.total > 0 ? (1 - ph.remain / ph.total) * 100 : 100}%`;
+        } else if (ph.kind === 'working') {
+          subEl.textContent = `${qPrefix}作业中 · ${ph.label} 剩余 ${fmtDur(ph.remain)}`;
           progEl.style.display = 'block';
-          progBar.style.width = `${p.total > 0 ? (1 - p.remain / p.total) * 100 : 100}%`;
+          progBar.style.width = `${ph.total > 0 ? (1 - ph.remain / ph.total) * 100 : 100}%`;
         } else {
           subEl.textContent = '即将出发';
         }
-        if (node) cursor = { ...node.cells[0] };
       } else {
         el.classList.add('draggable');
         el.draggable = true;
-        const p = pathToNode(graph, cursor, task.nodeTag);
-        const dist = p?.cost ?? 0;
-        const travelSec = dist * speed;
-        subEl.textContent = `路程 ${dist} 格 · 赶路 ${fmtDur(travelSec)} · 作业 ${task.needTime} 秒`;
-        if (p && p.cells.length) cursor = { ...p.cells[p.cells.length - 1] };
+        subEl.textContent = `${qPrefix}路程 ${dist} 格 · 赶路 ${fmtDur(travelSec)} · 作业 ${task.needTime} 秒`;
       }
     }
+
+    // 标题右侧：当前列表所有任务（含赶路 + 作业）的合计时长
+    const totalEl = document.getElementById('board-total');
+    if (totalEl) totalEl.textContent = `总时长 ${fmtDur(totalSec)}`;
   }
 
   private bindDrag(el: HTMLElement, index: number): void {

@@ -1,16 +1,34 @@
-import { type AttrKey, type Cell, type GameConfig, type GameState, type TaskSlot } from './types';
-import { MAX_TICK_EVENTS, REFILL_SEC } from './constants';
+import { type Cell, type GameConfig, type GameState, type TaskSlot } from './types';
+import {
+  CLS_TO_ATTR,
+  EVENT_TRIGGER_QUALITY,
+  MAX_TICK_EVENTS,
+  REFILL_SEC,
+  SKILL_XP_PER_QUALITY,
+} from './constants';
 import type { Graph } from './graph';
 import { pathToNearestCity, pathToNode } from './graph';
 import type { TaskIndex } from './taskGen';
 import { genTask } from './taskGen';
 import { rollRange } from './rng';
+import { passEval, rollEval } from './eval';
+import { settleOutput } from './produce';
+import { addSkillXp } from './skill';
+import { propagateDeed, maybeFirstMeet } from './generals';
+import { advanceEventClock, expireEvents, tryTriggerEvent } from './event';
+import type { TaskRecorder } from './taskLog';
+
+import { addAttrXp, gainTaskAttrXp } from './attrGain';
 import { bagSlotsUsed, pushLog } from './state';
 
 export interface TickCtx {
   cfg: GameConfig;
   graph: Graph;
   taskIndex: TaskIndex;
+  /** 可选：任务明细录制器（统计用，不入存档；不传即完全旁路） */
+  recorder?: TaskRecorder;
+  /** 是否在线推进。**随机事件只在线生成与计时**（离线冻结），离线结算必须传 false */
+  online?: boolean;
 }
 
 /**
@@ -19,6 +37,12 @@ export interface TickCtx {
  */
 export function tick(state: GameState, dt: number, ctx: TickCtx): void {
   if (!(dt > 0)) return;
+  // ── 随机事件：时间源仅「赶路」阶段累积 + 过期只在线发生（离线冻结） ──
+  if (ctx.online) {
+    // 时间源事件点只在赶路(moving)时累积；working / 回城 / 空闲阶段不累积（行为源不受影响）
+    if (state.phase.kind === 'moving') advanceEventClock(state, ctx.cfg, dt);
+    expireEvents(state);
+  }
   let guard = 0;
 
   while (dt > 1e-9) {
@@ -133,9 +157,22 @@ function settlePhase(state: GameState, ctx: TickCtx): void {
       const last = phase.path[phase.path.length - 1];
       if (last) state.cell = { ...last };
       state.stats.cellsWalked += Math.max(0, phase.path.length - 1);
-      const task = state.slots.find((s) => s.kind === 'task' && s.task.id === phase.taskId);
-      const needTime = task && task.kind === 'task' ? task.task.needTime : 60;
-      const def = task && task.kind === 'task' ? ctx.cfg.taskByTag[task.task.taskTag] : null;
+      const slot = state.slots.find((s) => s.kind === 'task' && s.task.id === phase.taskId);
+      const task = slot && slot.kind === 'task' ? slot.task : null;
+      const needTime = task ? task.needTime : 60;
+      const def = task ? ctx.cfg.taskByTag[task.taskTag] : null;
+      ctx.recorder?.noteTravel(phase.taskId, phase.total); // 赶路耗时（秒）= 路程格数 × speed
+
+      // ── 随机事件·行为源①：到达新城市（内容设计 Q-C4：包含） ──
+      if (task) {
+        const node = ctx.cfg.nodeByTag[task.nodeTag];
+        const cityTag = node?.belong ?? task.cityTag;
+        if (cityTag && !state.visitedCities.includes(cityTag)) {
+          state.visitedCities.push(cityTag);
+          tryTriggerEvent(state, { cfg: ctx.cfg, cityTag, facility: def?.nodeType });
+        }
+      }
+
       state.phase = {
         kind: 'working',
         taskId: phase.taskId,
@@ -176,17 +213,64 @@ function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
   const def = ctx.cfg.taskByTag[task.taskTag];
 
   if (def) {
-    // 产出必定完整入包，不截断、不丢弃（红线 6）
-    if (def.getItem && def.getItemNum) {
-      const n = rollRange(state, def.getItemNum);
-      state.bag[def.getItem] = (state.bag[def.getItem] ?? 0) + n;
-      state.stats.itemsGained[def.getItem] = (state.stats.itemsGained[def.getItem] ?? 0) + n;
-    }
+    // ── T4：评价掷骰（r = 主力属性 / attrBaseline），属性只移概率，保底 1× 不倒扣 ──
+    const attrKey = CLS_TO_ATTR[def.cls];
+    const evalRes =
+      def.attrBaseline > 0 && attrKey
+        ? rollEval(state, state.attrs[attrKey], def.attrBaseline, def.evalInc)
+        : passEval();
+    state.stats.evalTally[evalRes.tier] += 1;
+    state.stats.clsTally[def.cls] = (state.stats.clsTally[def.cls] ?? 0) + 1;
+
+    // ── T2：技能经验（只升区间，不动 needTime） ──
+    const skillXp = def.skill ? SKILL_XP_PER_QUALITY * Math.max(1, def.quality) : 0;
+    if (def.skill) addSkillXp(state, ctx.cfg, def.skill, skillXp);
+
+    // ── T5：三类收益分化（完整入包，不截断、不丢弃） ──
+    const rewards = settleOutput(state, ctx.cfg, def, evalRes);
+
+    // config 的 getAttrXp 保持 null（设计口径：任务不发属性经验），此处仅供旧配置兜底
     if (def.getAttrXp && def.getAttrXpNum) {
       addAttrXp(state, ctx.cfg, def.getAttrXp, rollRange(state, def.getAttrXpNum));
     }
+
+    // ── T7：属性过渡供给（随机事件接管前的唯一来源；接 F19b 后删这一句即可） ──
+    const attrXp = gainTaskAttrXp(state, ctx.cfg, def);
+
+    // ── F28：事迹传播——完成任务的展示属性一对多涨相关武将好感 ──
+    propagateDeed(state, def);
+    // ── C 类「初识事件」：随机偶遇一位素未谋面的武将，正式建立关系 ──
+    if (def.cls === 'C') maybeFirstMeet(state);
+
+    // ── 随机事件·行为源②③：首次造访设施 / 完成高品质任务 ──
+    if (def.nodeType && !state.visitedFacilities.includes(def.nodeType)) {
+      state.visitedFacilities.push(def.nodeType);
+      tryTriggerEvent(state, { cfg: ctx.cfg, cityTag: task.cityTag, facility: def.nodeType });
+    }
+    if (def.quality >= EVENT_TRIGGER_QUALITY) {
+      tryTriggerEvent(state, { cfg: ctx.cfg, cityTag: task.cityTag, facility: def.nodeType });
+    }
+
+    ctx.recorder?.record(
+      {
+        taskTag: def.tag,
+        taskName: def.name,
+        cls: def.cls,
+        quality: def.quality,
+        workSec: task.needTime,
+        evalName: evalRes.name,
+        evalTier: evalRes.tier,
+        evalMult: evalRes.mult,
+        rewards,
+        attrXp,
+        skill: def.skill,
+        skillXp,
+      },
+      task.id,
+    );
+
     const cityName = ctx.cfg.cityByTag[task.cityTag]?.name ?? task.cityTag;
-    pushLog(state, `${cityName}·${def.nodeName} ${def.name}完成`);
+    pushLog(state, `${cityName}·${def.nodeName} ${def.name}完成（${evalRes.name}）`);
   }
 
   state.stats.tasksDone += 1;
@@ -218,20 +302,6 @@ function depositAll(state: GameState): void {
   }
   state.stats.returnTrips += 1;
   pushLog(state, `存入仓库 ${n} 件，背包已清空`);
-}
-
-export function addAttrXp(state: GameState, cfg: GameConfig, key: AttrKey, amount: number): void {
-  state.attrXp[key] += amount;
-  let guard = 0;
-  while (guard++ < 1000) {
-    const lv = state.attrs[key];
-    const need = cfg.attrLvNeed(lv);
-    if (need === null || need === undefined) break; // 已满级
-    if (state.attrXp[key] >= need) {
-      state.attrXp[key] -= need;
-      state.attrs[key] = lv + 1;
-    } else break;
-  }
 }
 
 /** 当前所在格（渲染用）：由 phase 推导，绝不用帧累加 */

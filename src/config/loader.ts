@@ -25,7 +25,8 @@ export interface LoadedConfig {
 /**
  * 浏览器运行时读取 config/ 下的 xlsx：
  *   1. 拉 manifest.json（由 vite 插件按版本规则扫描生成）
- *   2. 拉版本号最大的那个 xlsx
+ *   2. 拉 manifest.latest 指向的那个 xlsx（同集默认最大版本；构建时可用
+ *      环境变量 `SANWALK_CONFIG=firstShow@1` 钉住旧版本回跑）
  *   3. SheetJS 解析 → parse.ts 应用 $ / 表头 / 空行规则
  */
 export async function loadGameConfig(base = ''): Promise<LoadedConfig> {

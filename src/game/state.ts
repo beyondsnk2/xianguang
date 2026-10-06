@@ -1,14 +1,16 @@
 import {
   ATTR_KEYS,
-  type AttrKey,
   type Cell,
   type GameConfig,
   type GameState,
-  type Task,
 } from './types';
-import { LOG_LIMIT, SAVE_VERSION } from './constants';
+import { EVENT_POINT_SEC, LOG_LIMIT, SAVE_VERSION } from './constants';
+import { ensureSkills, SKILL_INIT_LV } from './skill';
 import { pickOne, randInt } from './rng';
-import { buildTaskIndex, genTask, type TaskIndex } from './taskGen';
+import { buildTaskIndex, genTask } from './taskGen';
+import { ensureRelations, GENERALS } from './generals';
+import { emitEvent } from './events';
+import { ensureEventFields } from './event';
 
 /** 出生在州府 2×2 的哪一格：固定取「最左上」一格，避免随机导致存档不一致（D1） */
 export function pickSpawnCell(nodeCells: Cell[]): Cell {
@@ -18,6 +20,7 @@ export function pickSpawnCell(nodeCells: Cell[]): Cell {
 export function createInitialState(cfg: GameConfig, now: number, seed = 0): GameState {
   const state: GameState = {
     version: SAVE_VERSION,
+    cfgKey: `${cfg.meta.setName}_V${cfg.meta.version}`,
     lastTickAt: now,
     startCity: '',
     rngState: (seed || now ^ 0x9e3779b9) | 0,
@@ -30,14 +33,49 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
     storage: {},
     attrs: { force: 0, leadership: 0, intelligent: 0, politics: 0 },
     attrXp: { force: 0, leadership: 0, intelligent: 0, politics: 0 },
-    stats: { tasksDone: 0, returnTrips: 0, cellsWalked: 0, itemsGained: {}, startedAt: now },
+    skills: {},
+    favor: 0,
+    relations: Object.fromEntries(GENERALS.map((g) => [g.tag, 0])),
+    target: null,
+    ambition: 'free',
+    pace: 'mid',
+    blueprints: [],
+    events: [],
+    nextEventSeq: 1,
+    pending: [],
+    nextEventId: 1,
+    eventPoints: 0,
+    nextEventGap: EVENT_POINT_SEC, // 时间源初始间隔（之后每次触发在 5~15 分钟间随机重摇）
+    eventToday: 0,
+    eventDay: '',
+    jianwen: [],
+    visitedCities: [],
+    visitedFacilities: [],
+    eventCooldown: {},
+    doneEvents: [],
+    stats: {
+      tasksDone: 0,
+      returnTrips: 0,
+      cellsWalked: 0,
+      itemsGained: {},
+      startedAt: now,
+      evalTally: [0, 0, 0, 0],
+      starvedTasks: 0,
+      clsTally: {},
+    },
     log: [],
   };
+
+  // 9 技能初始化：1 级 0 经验（tier 1 → 品质窗口 1–3）
+  for (const s of cfg.skillDefs) {
+    if (s.tag) state.skills[s.tag] = { lv: SKILL_INIT_LV, xp: 0 };
+  }
 
   // 出生城市：从 startCityRand 里随机一个
   const candidates = cfg.values.startCityRand.filter((t) => cfg.cityByTag[t]);
   const cityTag = pickOne(state, candidates.length ? candidates : cfg.cities.map((c) => c.tag)) ?? cfg.cities[0]?.tag ?? '';
   state.startCity = cityTag;
+  state.visitedCities.push(cityTag); // 出生地视为已造访，不再触发"到达新城市"
   const cityNode = cfg.nodes.find((n) => n.belong === cityTag && n.name === 'city');
   if (cityNode) state.cell = pickSpawnCell(cityNode.cells);
 
@@ -55,6 +93,30 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
     state.slots.push(task ? { kind: 'task', task } : { kind: 'empty', refillIn: 0 });
   }
   return state;
+}
+
+/**
+ * 读档兜底：补齐 V2 新增的运行时字段。
+ * 设计口径是「配置一换就弃档」，这里只对**同版本号但字段缺失**的存档做最小补偿，避免读到半截结构当场崩。
+ */
+export function ensureRuntimeFields(state: GameState, cfg: GameConfig): void {
+  ensureSkills(state, cfg);
+  if (!Array.isArray(state.blueprints)) state.blueprints = [];
+  if (typeof state.favor !== 'number' || !Number.isFinite(state.favor)) state.favor = 0;
+  ensureRelations(state);
+  if (state.ambition !== 'free' && state.ambition !== 'wen' && state.ambition !== 'wu' && state.ambition !== 'zong' && state.ambition !== 'fang') {
+    state.ambition = 'free';
+  }
+  if (state.pace !== 'steady' && state.pace !== 'mid' && state.pace !== 'bold') {
+    state.pace = 'mid';
+  }
+  if (!state.stats) state.stats = { tasksDone: 0, returnTrips: 0, cellsWalked: 0, itemsGained: {}, startedAt: Date.now() } as GameState['stats'];
+  if (!Array.isArray(state.stats.evalTally) || state.stats.evalTally.length !== 4) state.stats.evalTally = [0, 0, 0, 0];
+  if (typeof state.stats.starvedTasks !== 'number') state.stats.starvedTasks = 0;
+  if (!state.stats.clsTally || typeof state.stats.clsTally !== 'object') state.stats.clsTally = {};
+  if (!Array.isArray(state.events)) state.events = [];
+  if (typeof state.nextEventSeq !== 'number') state.nextEventSeq = state.events.length + 1;
+  ensureEventFields(state);
 }
 
 /** 背包占用格数 = Σ ceil(数量 / 堆叠上限)（D4：按格数计，与 backPackSlotNum 字面一致） */
@@ -79,19 +141,6 @@ export function bagCapacity(cfg: GameConfig): number {
   return cfg.values.backPackSlotNum * cfg.values.itemStacking;
 }
 
-export function findTask(state: GameState, taskId: number | null): Task | null {
-  if (taskId === null) return null;
-  for (const s of state.slots) {
-    if (s.kind === 'task' && s.task.id === taskId) return s.task;
-  }
-  return null;
-}
-
-/** 队首 = 第一个非空槽（空槽只是占位等待补位，不阻塞队列） */
-export function headSlotIndex(state: GameState): number {
-  return state.slots.findIndex((s) => s.kind === 'task');
-}
-
 /** 维持不变量：任务区在前、空槽全部排到队尾（拖拽后调用，保持玩家排序不变） */
 export function normalizeSlots(state: GameState): void {
   const tasks = state.slots.filter((s) => s.kind === 'task');
@@ -99,21 +148,9 @@ export function normalizeSlots(state: GameState): void {
   state.slots = [...tasks, ...empties];
 }
 
-export function isLocked(state: GameState, taskId: number): boolean {
-  return state.currentTaskId === taskId;
-}
-
 export function pushLog(state: GameState, text: string, at = Date.now()): void {
   state.log.unshift({ at, text });
   if (state.log.length > LOG_LIMIT) state.log.length = LOG_LIMIT;
-}
-
-export function attrProgress(state: GameState, cfg: GameConfig, key: AttrKey): { need: number; cur: number } {
-  const need = cfg.attrLvNeed(state.attrs[key]);
-  return { need: need ?? 0, cur: state.attrXp[key] };
-}
-
-/** 生成一个新任务并放进空槽（供 tick 与 UI 共用） */
-export function makeTask(state: GameState, cfg: GameConfig, idx: TaskIndex): Task | null {
-  return genTask(state, cfg, idx);
+  // 事件流是主界面的信息出口：普通日志一律以「普通」稀有度进流
+  emitEvent(state, text, 0, 'system');
 }

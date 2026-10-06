@@ -12,9 +12,19 @@ export function fmtClock(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+import type { GameConfig } from '../game/types';
+
 const ITEM_NAMES: Record<string, string> = { grain: '粮', mine: '矿' };
 
-export function itemName(tag: string): string {
+/**
+ * 物品显示名：优先取配置表里的中文名（`cfg.itemByTag`），
+ * 再回退到内置小表，最后才回显 tag。传 cfg 才能显示 V2 的 27材料/54稀有/315成品/3名品真名。
+ */
+export function itemName(tag: string, cfg?: GameConfig): string {
+  if (cfg) {
+    const def = cfg.itemByTag[tag];
+    if (def?.name) return def.name;
+  }
   return ITEM_NAMES[tag] ?? tag;
 }
 

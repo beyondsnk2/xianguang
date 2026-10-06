@@ -9,7 +9,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "check": "esbuild tools/check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/check.cjs --log-level=warning && node node_modules/.sanwalk/check.cjs"
+    "_bundle": "esbuild tools/check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/check.cjs --log-level=warning",
+    "check": "npm run _bundle && node node_modules/.sanwalk/check.cjs",
+    "check:v1": "npm run _bundle && node node_modules/.sanwalk/check.cjs firstShow@1",
+    "check:v2": "npm run _bundle && node node_modules/.sanwalk/check.cjs firstShow@2",
+    "_bundle:calib": "esbuild tools/calib.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/calib.cjs --log-level=warning",
+    "calib": "npm run _bundle:calib && node node_modules/.sanwalk/calib.cjs",
+    "_bundle:sim": "esbuild tools/simulate100.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/sim.cjs --log-level=warning",
+    "sim": "npm run _bundle:sim && node node_modules/.sanwalk/sim.cjs"
   },
   "dependencies": {
     "xlsx": "^0.18.5"

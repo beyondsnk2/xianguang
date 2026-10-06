@@ -13,3 +13,9 @@ dom*.html
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 本地生成产物（模拟 / 工具输出，非工程源码）
+out/
+tools/out/
+__pycache__/
+tools/__pycache__/

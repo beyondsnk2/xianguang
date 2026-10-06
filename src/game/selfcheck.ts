@@ -13,14 +13,44 @@ export interface CheckItem {
   ok: boolean;
 }
 
-/** 开发文档 §7.1 路网对拍基准（Dijkstra 真值，必须全中） */
-export const DIST_BENCHMARKS: { from: number; to: number; expect: number; label: string }[] = [
-  { from: 2, to: 4, expect: 6, label: '兵营/上庸 → 农田/上庸（同城）' },
-  { from: 2, to: 8, expect: 22, label: '兵营/上庸 → 矿山/新野' },
-  { from: 1, to: 13, expect: 31, label: '州府上庸 → 州府襄阳' },
-  { from: 2, to: 14, expect: 37, label: '兵营/上庸 → 矿山/襄阳' },
-  { from: 6, to: 14, expect: 55, label: '酒馆/新野 → 矿山/襄阳（最远）' },
+/** V2（42 城大地图）的一组基准：地图坐标/道路一改，需重新取真值 */
+const V2_BENCHMARKS: { from: number; to: number; expect: number; label: string }[] = [
+  { from: 1, to: 3, expect: 1, label: '州府蓟 → 猎场/蓟（同城）' },
+  { from: 2, to: 5, expect: 7, label: '校场/蓟 → 猎场/北平（相邻城）' },
+  { from: 24, to: 63, expect: 9, label: '州府洛阳 → 州府襄阳' },
+  { from: 47, to: 74, expect: 29, label: '州府长安 → 州府建业（东西向）' },
+  { from: 92, to: 6, expect: 55, label: '州府交趾 → 州府襄平（最远）' },
 ];
+
+/**
+ * V3（66 连通修正版）：删 晋阳-上党、邺-河内；增 河内-上党。
+ * 基准数值与 V2 相同——删掉的两条边不在这 5 对的最短路上，
+ * 但按「地图一改必须重新取真值」的纪律独立登记（gen_map_v2.py 末尾打印）。
+ */
+const V3_BENCHMARKS: { from: number; to: number; expect: number; label: string }[] = [
+  { from: 1, to: 3, expect: 1, label: '州府蓟 → 猎场/蓟（同城）' },
+  { from: 2, to: 5, expect: 7, label: '校场/蓟 → 猎场/北平（相邻城）' },
+  { from: 24, to: 63, expect: 9, label: '州府洛阳 → 州府襄阳' },
+  { from: 47, to: 74, expect: 29, label: '州府长安 → 州府建业（东西向）' },
+  { from: 92, to: 6, expect: 55, label: '州府交趾 → 州府襄平（最远）' },
+];
+
+/**
+ * 路网对拍基准（Dijkstra 真值，必须全中）。
+ * 按**配置文件名**分组：地图一旦改动，必须同步刷新对应分组的 expect。
+ * V2 的这几条由 `tools/gen_map_v2.py` 末尾自动打印，改了坐标/道路后重跑即可拿到新值。
+ */
+export const DIST_BENCHMARKS: Record<string, { from: number; to: number; expect: number; label: string }[]> = {
+  'firstShow_V1.xlsx': [
+    { from: 2, to: 4, expect: 6, label: '兵营/上庸 → 农田/上庸（同城）' },
+    { from: 2, to: 8, expect: 22, label: '兵营/上庸 → 矿山/新野' },
+    { from: 1, to: 13, expect: 31, label: '州府上庸 → 州府襄阳' },
+    { from: 2, to: 14, expect: 37, label: '兵营/上庸 → 矿山/襄阳' },
+    { from: 6, to: 14, expect: 55, label: '酒馆/新野 → 矿山/襄阳（最远）' },
+  ],
+  'firstShow_V2.xlsx': V2_BENCHMARKS, // second 版即 42 城大地图（见产品文档 §十一 配置落地）
+  'firstShow_V3.xlsx': V3_BENCHMARKS, // 66 连通修正版 + cityLink 表（2026-10-06）
+};
 
 export interface CheckResult {
   ok: boolean;
@@ -43,8 +73,9 @@ export interface CheckResult {
 export function runSelfCheck(cfg: GameConfig, graph: Graph): CheckResult {
   const items: CheckItem[] = [];
 
-  // 1. 距离对拍
-  for (const b of DIST_BENCHMARKS) {
+  // 1. 距离对拍（按配置文件名取基准；未登记的配置跳过）
+  const bench = DIST_BENCHMARKS[cfg.meta.file] ?? [];
+  for (const b of bench) {
     const d = nodeDistance(graph, b.from, b.to);
     const actual = d === null ? '不可达' : String(d);
     items.push({ label: b.label, expect: String(b.expect), actual, ok: d === b.expect });
@@ -119,6 +150,18 @@ export interface SimResult {
   cellsWalked: number;
   storage: Record<string, number>;
   attrs: GameState['attrs'];
+  /** 9 技能等级快照 */
+  skills: Record<string, { lv: number; xp: number }>;
+  /** 评价四档计数 [拙, 平, 佳, 绝] */
+  evalTally: number[];
+  /** A/B/C 完成计数 */
+  clsTally: Record<string, number>;
+  favor: number;
+  blueprints: string[];
+  /** B 类缺料未完成次数 */
+  starvedTasks: number;
+  /** 仓内存货总件数 */
+  storageCount: number;
   samples: number;
   /** 空转采样数（应为 0） */
   idleSamples: number;
@@ -151,6 +194,8 @@ export function simulate(cfg: GameConfig, graph: Graph, hours = 24, seed = 20261
     }
   }
   const totalSec = hours * 3600;
+  const skills: Record<string, { lv: number; xp: number }> = {};
+  for (const [tag, p] of Object.entries(state.skills)) skills[tag] = { lv: p.lv, xp: p.xp };
   return {
     hours,
     tasksDone: state.stats.tasksDone,
@@ -161,6 +206,13 @@ export function simulate(cfg: GameConfig, graph: Graph, hours = 24, seed = 20261
     cellsWalked: state.stats.cellsWalked,
     storage: { ...state.storage },
     attrs: { ...state.attrs },
+    skills,
+    evalTally: [...state.stats.evalTally],
+    clsTally: { ...state.stats.clsTally },
+    favor: state.favor,
+    blueprints: [...state.blueprints],
+    starvedTasks: state.stats.starvedTasks,
+    storageCount: Object.values(state.storage).reduce((a, b) => a + b, 0),
     samples,
     idleSamples,
     overloadViolations,

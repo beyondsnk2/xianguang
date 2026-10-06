@@ -18,15 +18,18 @@
       <header id="topbar">
         <div class="brand">
           <span class="brand-name">闲逛</span>
-          <span class="brand-sub" id="meta-line">—</span>
         </div>
-        <div class="top-stats">
-          <span class="stat">完成任务 <b id="stat-tasks">0</b></span>
-          <span class="stat">回城 <b id="stat-returns">0</b></span>
-          <span class="stat">行走 <b id="stat-cells">0</b> 格</span>
-          <span class="stat dim">速度 <b id="stat-speed">20</b> 秒/格</span>
-        </div>
+        <div class="top-stats" id="top-stats"></div>
       </header>
+
+      <div id="taskbar">
+        <div class="tb-row">
+          <span class="tb-name" id="tb-name">待命</span>
+          <span class="tb-target" id="tb-target">—</span>
+          <span class="tb-remain" id="tb-remain">—</span>
+        </div>
+        <div class="bar big"><i id="tb-bar"></i></div>
+      </div>
 
       <main id="main">
         <section id="map-pane">
@@ -37,6 +40,14 @@
             </button>
             <button class="menu-item" id="menu-char">
               <span class="mi-ico">将</span><span class="mi-txt">角色</span>
+            </button>
+            <button class="menu-item" id="menu-rel">
+              <span class="mi-ico">缘</span><span class="mi-txt">关系</span>
+              <span class="mi-dot" hidden></span>
+            </button>
+            <button class="menu-item" id="menu-event">
+              <span class="mi-ico">事</span><span class="mi-txt">事件</span>
+              <span class="mi-dot count" hidden></span>
             </button>
           </nav>
           <div class="map-overlay">
@@ -50,15 +61,11 @@
         </section>
 
         <aside id="side">
-          <section class="card" id="status-card">
-            <h2>当前状态</h2>
-            <div id="status-body"></div>
-          </section>
-
           <section class="card" id="board-card">
             <h2>
               任务板
               <span class="h2-actions">
+                <span class="board-total" id="board-total">—</span>
                 <button class="mini" id="btn-autosort" title="贪心：每次选最近的">一键最优排序</button>
               </span>
             </h2>
@@ -66,16 +73,21 @@
             <p class="tip">拖动卡片可改变顺序（队首已锁定）· 完成的任务出列，180 秒后新任务补到队尾</p>
           </section>
 
-          <section class="card" id="ctrl-card">
-            <h2>调试 / 存档</h2>
-            <div id="ctrl-body"></div>
-            <h2 style="margin-top:12px">旅途日志</h2>
-            <div id="log-body" class="log"></div>
+          <section class="card" id="feed-card">
+            <h2>事件流</h2>
+            <div id="feed-body" class="feed"></div>
           </section>
 
-          <section class="card" id="check-card">
-            <h2>配置与路网自检</h2>
-            <div id="check-body"></div>
+          <section class="card dev-card">
+            <details id="dev-drawer">
+              <summary>开发者 / 存档 / 自检</summary>
+              <div class="dev-body">
+                <div id="ctrl-body"></div>
+                <h2 class="dev-sub">配置与路网自检</h2>
+                <div id="check-body"></div>
+                <div class="kv"><span>配置</span><b id="meta-line">—</b></div>
+              </div>
+            </details>
           </section>
         </aside>
       </main>
@@ -91,6 +103,7 @@
       </div>
     </div>
 
+    <div id="float-wrap"></div>
     <div id="toast-wrap"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

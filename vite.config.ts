@@ -22,7 +22,11 @@ interface ConfigFileInfo {
  * 扫描 config/ 目录，应用《配置读取规范.md》：
  *  - 跳过 Excel 临时锁文件（~$ 开头）
  *  - 只认 `{配置集}_V{版本号}.xlsx`
- *  - 同一配置集只保留版本号最大的那个（数值比较，V10 > V9）
+ *  - 生效文件默认取版本号最大的那个（数值比较，V10 > V9）
+ *
+ * **可用环境变量 `SANWALK_CONFIG` 钉住具体版本**（回跑旧配置时用）：
+ *   `firstShow@1` / `@1` → firstShow_V1.xlsx；`firstShow` → 该集最大版本；不设 → 首个配置集的最大版本
+ * 被顶掉的旧版本仍然会出现在 manifest.files 里（可被直接请求），只是不作为默认生效表。
  */
 function scanConfigFiles(): { latest: ConfigFileInfo | null; files: ConfigFileInfo[] } {
   if (!fs.existsSync(CONFIG_DIR)) return { latest: null, files: [] };
@@ -45,15 +49,32 @@ function scanConfigFiles(): { latest: ConfigFileInfo | null; files: ConfigFileIn
       bytes: stat.size,
     });
   }
+  const files = all.sort((a, b) => a.setName.localeCompare(b.setName) || a.version - b.version);
 
-  // 同一配置集只取版本号最大的
-  const latestBySet = new Map<string, ConfigFileInfo>();
-  for (const f of all) {
-    const cur = latestBySet.get(f.setName);
-    if (!cur || f.version > cur.version) latestBySet.set(f.setName, f);
+  // 默认生效：第一个配置集里版本号最大的
+  const firstSet = files[0]?.setName;
+  const maxOf = (setName: string) =>
+    files.filter((f) => f.setName === setName).reduce<ConfigFileInfo | null>((a, b) => (!a || b.version > a.version ? b : a), null);
+  let latest = firstSet ? maxOf(firstSet) : null;
+
+  // 环境变量钉版本
+  const pin = (process.env.SANWALK_CONFIG ?? '').trim();
+  if (pin) {
+    const at = pin.indexOf('@');
+    const setName = (at >= 0 ? pin.slice(0, at).trim() : pin) || firstSet || '';
+    const verText = at >= 0 ? pin.slice(at + 1).trim() : '';
+    const hit = verText
+      ? files.find((f) => f.setName === setName && f.version === Number(verText))
+      : maxOf(setName);
+    if (!hit) {
+      const vs = files.filter((f) => f.setName === setName).map((f) => `V${f.version}`).join(' / ');
+      throw new Error(
+        `[config] SANWALK_CONFIG="${pin}" 匹配不到文件。${setName} 现有版本：${vs || '（无）'}`,
+      );
+    }
+    latest = hit;
+    console.log(`[config] SANWALK_CONFIG="${pin}" → 生效配置 ${hit.name}`);
   }
-  const files = [...latestBySet.values()].sort((a, b) => a.setName.localeCompare(b.setName));
-  const latest = files[0] ?? null;
   return { latest, files };
 }
 
