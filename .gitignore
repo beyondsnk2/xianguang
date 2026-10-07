@@ -19,3 +19,9 @@ out/
 tools/out/
 __pycache__/
 tools/__pycache__/
+
+# 配置备份快照（非工程源码）
+config/*.backup_*.xlsx
+
+# 文档复制副本（非工程源码）
+doc/V2 - 副本/

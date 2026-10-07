@@ -72,6 +72,9 @@ button.active { background: var(--gold); color: #1a1206; border-color: var(--gol
 .cap b { color: var(--text); margin-left: 6px; font-size: 12px; }
 .cap.warn { border-color: var(--red); color: var(--red); }
 .cap.warn b { color: var(--red); }
+/* V4 金钱胶囊：金色描边，与「资源」语义对齐 */
+.cap.money { border-color: var(--gold); }
+.cap.money b { color: var(--gold); }
 
 /* ── 当前任务条（全局最醒目） ── */
 #taskbar {

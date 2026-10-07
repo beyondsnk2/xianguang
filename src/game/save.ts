@@ -27,6 +27,15 @@ export function saveState(state: GameState): void {
   }
 }
 
+/** localStorage 里是否有存档（不论版本是否匹配）。用于区分「没存档」与「版本不符被弃」 */
+export function hasSave(): boolean {
+  try {
+    return localStorage.getItem(SAVE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function clearSave(): void {
   try {
     localStorage.removeItem(SAVE_KEY);

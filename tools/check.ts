@@ -7,68 +7,11 @@
  * 运行：npm run check（同集最大版本，当前 V3）/ npm run check:v1（钉住 firstShow_V1）
  *       / npm run check <配置集>@<版本>（任意指定，如 firstShow@1）
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { readXlsx } from '../src/config/xlsxSource';
-import { parseWorkbook } from '../src/config/parse';
 import { buildGraph, nodeDistance } from '../src/game/graph';
 import { offlineSettle, runSelfCheck, simulate } from '../src/game/selfcheck';
 import { AMBITION_SKILLS } from '../src/game/taskGen';
-
-const ROOT = process.cwd();
-const CONFIG_DIR = path.join(ROOT, 'config');
-
-/** 未显式指定配置集时用它 */
-const DEFAULT_SET = 'firstShow';
-
-/**
- * 选配置 + 选版本。命名规则 `{配置集名}_V{版本号}.xlsx`，**同名默认取版本号最大的**
- * （所以 firstShow_V1 会自动被 firstShow_V3 顶掉；要回跑旧版必须显式钉版本）。
- * @param want 命令行第 1 个参数，三种写法：
- *   - 省略            → 默认配置集的最大版本（当前即 V3）
- *   - `firstShow`     → 该配置集的最大版本
- *   - `firstShow@1` / `@1` → 精确钉住某版本（回跑旧配置用；@ 前留空则用默认集）
- */
-function pickLatest(want?: string): { file: string; setName: string; version: number } {
-  const all: { file: string; setName: string; version: number }[] = [];
-  for (const name of fs.readdirSync(CONFIG_DIR)) {
-    if (name.startsWith('~$') || !/\.xlsx$/i.test(name)) continue;
-    const m = /^(.+)_V(\d+)\.xlsx$/i.exec(name);
-    if (m) all.push({ file: name, setName: m[1], version: Number(m[2]) });
-  }
-  if (!all.length) throw new Error('config/ 下没有符合 {配置集名}_V{版本号}.xlsx 规则的 xlsx');
-
-  // 拆「配置集@版本」：@ 前的配置集可省略（留空 → 默认集）
-  const at = want?.indexOf('@') ?? -1;
-  const setName = (at >= 0 ? want!.slice(0, at).trim() : want?.trim()) || DEFAULT_SET;
-  const verText = at >= 0 ? want!.slice(at + 1).trim() : '';
-  if (at >= 0 && !/^\d+$/.test(verText)) {
-    throw new Error(`版本号必须是数字，收到「${verText}」。用法：firstShow@1`);
-  }
-
-  const same = all.filter((f) => f.setName === setName);
-  const vs = same.map((f) => `V${f.version}`).sort((a, b) => Number(b.slice(1)) - Number(a.slice(1)));
-  if (at >= 0) {
-    const hit = same.find((f) => f.version === Number(verText));
-    if (!hit) {
-      throw new Error(`找不到 ${setName}_V${verText}.xlsx。该配置集现有版本：${vs.length ? vs.join(' / ') : '（无）'}`);
-    }
-    return hit;
-  }
-  if (!same.length) {
-    const sets = [...new Set(all.map((f) => f.setName))].sort();
-    throw new Error(`找不到配置集「${setName}」。可用：${sets.join(' / ')}`);
-  }
-
-  const picked = same.reduce((a, b) => (b.version > a.version ? b : a));
-  const sets = [...new Set(all.map((f) => f.setName))].sort();
-  if (sets.length > 1) {
-    console.log(`(可用配置集：${sets.join(' / ')}；想回跑旧版本加参数，如 firstShow@1)`);
-  } else if (vs.length > 1) {
-    console.log(`(${setName} 现有版本：${vs.join(' / ')}；默认跑最新的 V${picked.version}，回跑旧版用 ${setName}@1)`);
-  }
-  return picked;
-}
+import { buildDemand, buildSubCatFacility, cityRatio } from '../src/game/economy';
+import { loadConfig } from './pickConfig';
 
 /**
  * 各版本已在设计文档里定档的距离指标，仅用作控制台对照显示（不影响判定）。
@@ -91,17 +34,8 @@ function docKey(setName: string, version: number): string {
 }
 
 function main(): void {
-  const latest = pickLatest(process.argv[2]);
+  const { config, picked: latest, warnings } = loadConfig(process.argv[2]);
   console.log(`配置集：${latest.setName}  版本：V${latest.version}  文件：${latest.file}`);
-
-  const buf = fs.readFileSync(path.join(CONFIG_DIR, latest.file));
-  const sheets = readXlsx(new Uint8Array(buf));
-  const { config, warnings } = parseWorkbook(sheets, {
-    file: latest.file,
-    setName: latest.setName,
-    version: latest.version,
-    loadedAt: new Date().toISOString(),
-  });
 
   console.log(`生效表：${config.meta.sheets.join(', ')}`);
   console.log(
@@ -114,7 +48,8 @@ function main(): void {
   );
   console.log(
     `数值：speed=${config.values.speed}s/格 背包=${config.values.backPackSlotNum}格×${config.values.itemStacking} ` +
-      `任务槽=${config.values.initTaskListSlot} 出生候选=${config.values.startCityRand.join('/')}`,
+      `任务槽=${config.values.initTaskListSlot} 出生候选=${config.values.startCityRand.join('/')}` +
+      ` 初始金钱=${config.values.initMoney}文`,
   );
   if (warnings.length) {
     console.log('⚠ 校验告警：');
@@ -202,6 +137,11 @@ function main(): void {
   console.log(`累计走格：${sim.cellsWalked}`);
   console.log(`仓库：${sim.storageCount} 件 ${JSON.stringify(sim.storage)}`);
   console.log(`四维属性：${JSON.stringify(sim.attrs)}`);
+  console.log(
+    `随机事件：结算 ${sim.eventsSettled} 条（${(sim.eventsSettled / Math.max(1, sim.hours / 24)).toFixed(1)} 条/天）` +
+      ` ｜ 属性经验累计 ${sim.attrXpTotal}（${(sim.attrXpTotal / 24).toFixed(1)}/天，四维合计）` +
+      ` ｜ 容器残留 ${sim.pendingLeft}`,
+  );
   if (Object.keys(sim.skills).length) {
     const names = Object.entries(sim.skills)
       .map(([tag, p]) => `${config.skillByTag[tag]?.name ?? tag}Lv${p.lv}`)
@@ -213,7 +153,44 @@ function main(): void {
       ` ｜ A/B/C 完成=${sim.clsTally.A ?? 0}/${sim.clsTally.B ?? 0}/${sim.clsTally.C ?? 0}` +
       ` ｜ 好感=${sim.favor} 图纸=${sim.blueprints.join('、') || '—'} 缺料停产=${sim.starvedTasks}`,
   );
+  console.log(
+    `金钱：${sim.money} 文（初始 ${config.values.initMoney}）｜累计收入 +${sim.moneyEarned}（工钱 ${sim.moneyEarnedWage} / 赏金 ${sim.moneyEarnedBounty}）／ 支出 -${sim.moneySpent} ｜ 自动补货 ${sim.restockCount} 次`,
+  );
   console.log(`空转采样：${sim.idleSamples} / ${sim.samples}（应 0）｜超容未回城：${sim.overloadViolations}（应 0）`);
+
+  // V4 价格体系（无 price 表时整体禁用，这里是唯一的观测口）
+  if (config.priceRows.length) {
+    const mats = config.priceRows.filter((p) => p.cat === '材料').sort((a, b) => a.tier - b.tier);
+    const priced = config.items.filter((i) => i.price > 0);
+    const noSell = config.items.filter((i) => !i.sellable);
+    console.log(
+      `\n── 价格体系 ──\n` +
+        `材料骨架：${mats.map((p) => `t${p.tier}=${p.base}`).join(' ')}（工钱/赏金/补货读此档）\n` +
+        `物品有价：${priced.length} / ${config.items.length} ｜ 不同价格 ${new Set(priced.map((i) => i.price)).size} 个 ｜ ` +
+        `区间 ${Math.min(...priced.map((i) => i.price))}~${Math.max(...priced.map((i) => i.price))} 文 ｜ ` +
+        `不可售 ${noSell.length}（${noSell.map((i) => i.name).join('、') || '—'}）\n` +
+        `稀有稀缺系数：${Object.values(config.subCatRatio).map((r) => `${r.subCat}=${r.ratio}`).join(' ') || '—'}`,
+    );
+
+    // E4 城际供需系数（补货买价的一部分：基准 × 城系数 × 溢价）
+    const demand = buildDemand(config);
+    const fac = buildSubCatFacility(config);
+    const tally: Record<string, number> = {};
+    let cells = 0;
+    for (const c of config.cities) {
+      for (const sub of Object.keys(fac)) {
+        const r = cityRatio(demand, c.tag, sub);
+        tally[String(r)] = (tally[String(r)] ?? 0) + 1;
+        cells++;
+      }
+    }
+    console.log(
+      `城际供需：材料 subCat ${Object.keys(fac).length} 个（${Object.entries(fac).map(([s, n]) => `${s}→${n}`).join(' ')}）\n` +
+        `系数分布：${Object.entries(tally).sort().map(([r, n]) => `${r}×${n}`).join(' ／ ')}（合计 ${cells} = ${config.cities.length} 城 × ${Object.keys(fac).length}）`,
+    );
+  } else {
+    console.log('\n── 价格体系 ──\n（无 price 表 → 经济系统整体禁用）');
+  }
 
   console.log('\n── 离线结算 ──');
   for (const h of [1, 8, 24]) {

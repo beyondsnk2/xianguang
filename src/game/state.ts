@@ -22,6 +22,7 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
     version: SAVE_VERSION,
     cfgKey: `${cfg.meta.setName}_V${cfg.meta.version}`,
     lastTickAt: now,
+    simNow: now,
     startCity: '',
     rngState: (seed || now ^ 0x9e3779b9) | 0,
     cell: { x: 0, y: 0 },
@@ -31,6 +32,7 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
     slots: [],
     bag: {},
     storage: {},
+    money: cfg.values.initMoney,
     attrs: { force: 0, leadership: 0, intelligent: 0, politics: 0 },
     attrXp: { force: 0, leadership: 0, intelligent: 0, politics: 0 },
     skills: {},
@@ -61,7 +63,19 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
       startedAt: now,
       evalTally: [0, 0, 0, 0],
       starvedTasks: 0,
+      starvedMat: 0,
+      starvedRare: 0,
+      starvedBySubCat: {},
+      raresProduced: {},
+      demandBySubCat: {},
       clsTally: {},
+      eventsSettled: 0,
+      attrXpTotal: 0,
+      moneyEarned: 0,
+      moneyEarnedWage: 0,
+      moneyEarnedBounty: 0,
+      moneySpent: 0,
+      restockCount: 0,
     },
     log: [],
   };
@@ -113,7 +127,24 @@ export function ensureRuntimeFields(state: GameState, cfg: GameConfig): void {
   if (!state.stats) state.stats = { tasksDone: 0, returnTrips: 0, cellsWalked: 0, itemsGained: {}, startedAt: Date.now() } as GameState['stats'];
   if (!Array.isArray(state.stats.evalTally) || state.stats.evalTally.length !== 4) state.stats.evalTally = [0, 0, 0, 0];
   if (typeof state.stats.starvedTasks !== 'number') state.stats.starvedTasks = 0;
+  if (typeof state.stats.starvedMat !== 'number') state.stats.starvedMat = 0;
+  if (typeof state.stats.starvedRare !== 'number') state.stats.starvedRare = 0;
+  if (!state.stats.starvedBySubCat || typeof state.stats.starvedBySubCat !== 'object') state.stats.starvedBySubCat = {};
+  if (!state.stats.raresProduced || typeof state.stats.raresProduced !== 'object') state.stats.raresProduced = {};
+  if (!state.stats.demandBySubCat || typeof state.stats.demandBySubCat !== 'object') state.stats.demandBySubCat = {};
   if (!state.stats.clsTally || typeof state.stats.clsTally !== 'object') state.stats.clsTally = {};
+  if (typeof state.stats.eventsSettled !== 'number') state.stats.eventsSettled = 0;
+  if (typeof state.stats.attrXpTotal !== 'number') state.stats.attrXpTotal = 0;
+  // V4 金钱：同版本号但字段缺失的存档 → 补初始金钱与三个统计（金钱永不为负）
+  if (typeof state.money !== 'number' || !Number.isFinite(state.money) || state.money < 0) {
+    state.money = cfg.values.initMoney;
+  }
+  if (typeof state.stats.moneyEarned !== 'number') state.stats.moneyEarned = 0;
+  if (typeof state.stats.moneyEarnedWage !== 'number') state.stats.moneyEarnedWage = 0;
+  if (typeof state.stats.moneyEarnedBounty !== 'number') state.stats.moneyEarnedBounty = 0;
+  if (typeof state.stats.moneySpent !== 'number') state.stats.moneySpent = 0;
+  if (typeof state.stats.restockCount !== 'number') state.stats.restockCount = 0;
+  if (typeof state.simNow !== 'number') state.simNow = state.lastTickAt ?? Date.now();
   if (!Array.isArray(state.events)) state.events = [];
   if (typeof state.nextEventSeq !== 'number') state.nextEventSeq = state.events.length + 1;
   ensureEventFields(state);

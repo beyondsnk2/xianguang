@@ -111,6 +111,7 @@ export function renderTopStats(root: HTMLElement, state: GameState, cfg: GameCon
   const pendingWarn = pending >= EVENT_CONTAINER_CAP - 5 ? 'warn' : '';
   root.innerHTML =
     capsule('任务', String(state.stats.tasksDone)) +
+    `<span class="cap money" title="金钱（文）：工钱 + 赏金，用于缺料自动补货">金钱<b>${Math.floor(state.money)}</b></span>` +
     capsule('背包', `${carried}/${cap}`, ratio >= 0.8 ? 'warn' : '') +
     capsule('已结识', `${metCount}/${GENERALS.length}`) +
     capsule('技能', `Lv${topSkill}`) +

@@ -5,6 +5,7 @@ import {
   MAX_TICK_EVENTS,
   REFILL_SEC,
   SKILL_XP_PER_QUALITY,
+  WAGE_RATIO,
 } from './constants';
 import type { Graph } from './graph';
 import { pathToNearestCity, pathToNode } from './graph';
@@ -18,8 +19,9 @@ import { propagateDeed, maybeFirstMeet } from './generals';
 import { advanceEventClock, expireEvents, tryTriggerEvent } from './event';
 import type { TaskRecorder } from './taskLog';
 
-import { addAttrXp, gainTaskAttrXp } from './attrGain';
+import { addAttrXp } from './attrGain';
 import { bagSlotsUsed, pushLog } from './state';
+import { tierPrice } from './economy';
 
 export interface TickCtx {
   cfg: GameConfig;
@@ -37,6 +39,8 @@ export interface TickCtx {
  */
 export function tick(state: GameState, dt: number, ctx: TickCtx): void {
   if (!(dt > 0)) return;
+  // 模拟时钟随 dt 推进（事件计时改用 simNow，避免快速校准 sim 里 Date.now() 不随模拟时间走导致上限失真）
+  state.simNow += dt * 1000;
   // ── 随机事件：时间源仅「赶路」阶段累积 + 过期只在线发生（离线冻结） ──
   if (ctx.online) {
     // 时间源事件点只在赶路(moving)时累积；working / 回城 / 空闲阶段不累积（行为源不受影响）
@@ -227,15 +231,13 @@ function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
     if (def.skill) addSkillXp(state, ctx.cfg, def.skill, skillXp);
 
     // ── T5：三类收益分化（完整入包，不截断、不丢弃） ──
-    const rewards = settleOutput(state, ctx.cfg, def, evalRes);
+    const rewards = settleOutput(state, ctx.cfg, def, evalRes, task);
 
-    // config 的 getAttrXp 保持 null（设计口径：任务不发属性经验），此处仅供旧配置兜底
+    // config 的 getAttrXp 保持 null（设计口径：任务不发属性经验，四维只由随机事件积累），
+    // 此处仅供旧配置兜底
     if (def.getAttrXp && def.getAttrXpNum) {
       addAttrXp(state, ctx.cfg, def.getAttrXp, rollRange(state, def.getAttrXpNum));
     }
-
-    // ── T7：属性过渡供给（随机事件接管前的唯一来源；接 F19b 后删这一句即可） ──
-    const attrXp = gainTaskAttrXp(state, ctx.cfg, def);
 
     // ── F28：事迹传播——完成任务的展示属性一对多涨相关武将好感 ──
     propagateDeed(state, def);
@@ -262,7 +264,6 @@ function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
         evalTier: evalRes.tier,
         evalMult: evalRes.mult,
         rewards,
-        attrXp,
         skill: def.skill,
         skillXp,
       },
@@ -270,7 +271,15 @@ function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
     );
 
     const cityName = ctx.cfg.cityByTag[task.cityTag]?.name ?? task.cityTag;
-    pushLog(state, `${cityName}·${def.nodeName} ${def.name}完成（${evalRes.name}）`);
+    // ── E0a：任务工钱（与物品奖励同一次结算、写进同一条事件流；不新增 UI）──
+    // 口径：统一按 price[材料|tier]，与 A/B/C 类别无关（工钱是跑腿费只认品质）。
+    const wage = Math.round(tierPrice(ctx.cfg, def.quality) * WAGE_RATIO);
+    if (wage > 0) {
+      state.money += wage;
+      state.stats.moneyEarned += wage;
+      state.stats.moneyEarnedWage += wage;
+    }
+    pushLog(state, `${cityName}·${def.nodeName} ${def.name}完成（${evalRes.name}）· 工钱+${wage}文`);
   }
 
   state.stats.tasksDone += 1;

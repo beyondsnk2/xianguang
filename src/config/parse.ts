@@ -1,4 +1,5 @@
 import type { CellVal, SheetLike } from './xlsxSource';
+import { INIT_MONEY } from '../game/constants';
 import {
   ATTR_KEYS,
   type AttrKey,
@@ -12,10 +13,12 @@ import {
   type ItemDef,
   type MapNodeDef,
   type MapRoadDef,
+  type PriceRow,
   type Range,
   type RecipeDef,
   type SkillDef,
   type StateDef,
+  type SubCatRatioRow,
   type TaskDef,
 } from '../game/types';
 
@@ -289,9 +292,49 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
       qMax: asNum(r['qMax'], 0),
       stack: asNum(r['stack'], 0),
       source: asStr(r['source']),
+      // V4 经济列：旧配置无这两列 → 价格 0 / 可售 true，经济系统整体按「禁用」处理
+      price: asNum(r['price'], 0),
+      sellable: asNum(r['sellable'], 1) !== 0,
       note: asStr(r['note']),
     };
   }).filter((i) => i.tag);
+
+  // price（V4 起）：cat × tier 基准价骨架。无此表 → 价格体系整体禁用
+  const priceRows: PriceRow[] = (tables['price'] ?? []).map((r) => ({
+    cat: asStr(r['cat']),
+    tier: asNum(r['tier'], NaN),
+    base: asNum(r['base'], 0),
+    sellRatio: asNum(r['sellRatio'], 1),
+    note: asStr(r['note']),
+  })).filter((p) => p.cat && Number.isFinite(p.tier));
+  const priceByKey: Record<string, number> = {};
+  for (const p of priceRows) priceByKey[`${p.cat}|${p.tier}`] = p.base;
+
+  // subCatRatio（V4 起）：稀有料稀缺系数。无此表 → 空对象（经济系统禁用时不参与）
+  const subCatRatio: Record<string, SubCatRatioRow> = {};
+  for (const r of tables['subCatRatio'] ?? []) {
+    const sub = asStr(r['subCat']);
+    if (!sub) continue;
+    subCatRatio[sub] = {
+      subCat: sub,
+      skillPool: asStr(r['skillPool']),
+      poolSize: asNum(r['poolSize'], 0),
+      demandCount: asNum(r['demandCount'], 0),
+      supplyShare: asNum(r['supplyShare'], 0),
+      rawRatio: asNum(r['rawRatio'], 0),
+      ratio: asNum(r['ratio'], 1),
+      note: asStr(r['note']),
+    };
+  }
+
+  // rareDropWeight（V4 / Plan C）：稀有 subCat → 掉率权重（手改优先，缺则回退配方需求推导）
+  const dropWeightBySub: Record<string, number> = {};
+  for (const r of tables['rareDropWeight'] ?? []) {
+    const sub = asStr(r['subCat']);
+    const w = asNum(r['weight'], NaN);
+    // 存「表中存在」的权重（含 0）。0 是「显式抑制该稀有」的合法值，不能再回退到配方计数。
+    if (sub && Number.isFinite(w)) dropWeightBySub[sub] = w;
+  }
 
   // recipe（35 制造族 × 9 品质 = 315）
   const recipes: RecipeDef[] = (tables['recipe'] ?? []).map((r) => {
@@ -307,6 +350,10 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
       needItem1Num: asNum(r['needItem1Num'], 0),
       matQualityFloor: asNum(r['matQualityFloor'], 0),
       needRare: asStr(r['needRare']),
+      // 额外层：其他行当的 (q-1) 阶产出（V5 结构；旧配置无此三列 → 空，不参与消耗）
+      needItem2: asStr(r['needItem2']),
+      needItem2Num: asNum(r['needItem2Num'], 0),
+      needRare2: asStr(r['needRare2']),
       needBlueprint: asStr(r['needBlueprint']),
       resultItem: asStr(r['resultItem']),
       resultNum: asNum(r['resultNum'], 0),
@@ -362,6 +409,29 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     rareSubCatBySkill[bp.fromSkill] = [...set].sort();
   }
 
+  /**
+   * Plan C：稀有掉率权重（C 类技能 → subCat → 权重）。
+   * 优先用 `rareDropWeight` 表（实测烘焙、可手改）；缺表或某 subCat 缺行时，回退到「配方 needRare 计数」推导（同一池内归一化）。
+   * 回退口径保证：即使不烘焙，Plan C 也按真实需求分布掉率，而非均匀。
+   */
+  const demandCountBySub: Record<string, number> = {};
+  for (const r of recipes) {
+    if (!r.needRare) continue;
+    const s = subOf(r.needRare);
+    demandCountBySub[s] = (demandCountBySub[s] ?? 0) + 1;
+  }
+  const rareSubCatWeightBySkill: Record<string, Record<string, number>> = {};
+  for (const [skill, subs] of Object.entries(rareSubCatBySkill)) {
+    const raw: Record<string, number> = {};
+    for (const s of subs) {
+      // 表中显式给了权重（即使 0）→ 直接用；表中无此 subCat 行 → 回退配方 needRare 计数
+      raw[s] = s in dropWeightBySub ? (dropWeightBySub[s] ?? 0) : demandCountBySub[s] ?? 0;
+    }
+    const sum = Object.values(raw).reduce((a, b) => a + (b > 0 ? b : 0), 0);
+    rareSubCatWeightBySkill[skill] = {};
+    for (const s of subs) rareSubCatWeightBySkill[skill][s] = sum > 0 ? (raw[s] > 0 ? raw[s] : 0) / sum : 1 / subs.length;
+  }
+
   // config
   const rawCfg: Record<string, CellVal> = {};
   for (const r of tables['config'] ?? []) {
@@ -375,6 +445,8 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     initTaskListSlot: asNum(rawCfg['initTaskListSlot'], 7),
     startCityRand: splitList(rawCfg['startCityRand']),
     initAttr: {} as Record<AttrKey, Range>,
+    // V4 金钱：config 表缺列时回落 INIT_MONEY（旧配置不崩，但经济系统本就因无 price 表而禁用）
+    initMoney: asNum(rawCfg['initMoney'], INIT_MONEY),
   };
   const initRangeCfg: [AttrKey, string][] = [
     ['force', 'initForce'],
@@ -420,6 +492,10 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     blueprints,
     blueprintByTag,
     rareSubCatBySkill,
+    rareSubCatWeightBySkill,
+    priceRows,
+    priceByKey,
+    subCatRatio,
   };
 
   // ── 校验 ──
@@ -509,6 +585,32 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
       '红线① A 类任务产出稀有材料',
       tasks.filter((t) => t.cls === 'A' && itemByTag[t.mainOutput]?.cat === '稀有').map((t) => t.tag),
     );
+
+    // ── V4 价格体系校验（仅在配置了 price 表时生效，旧配置直接跳过）──
+    if (priceRows.length) {
+      // 工钱/赏金/补货都读 `材料|tier`，骨架必须铺满 1-9，否则高品工钱会回落到 0
+      const matTiers = priceRows.filter((p) => p.cat === '材料').map((p) => p.tier);
+      const missTier: string[] = [];
+      for (let t = 1; t <= 9; t++) if (!matTiers.includes(t)) missTier.push(`材料|t${t}`);
+      agg('价格骨架 材料 tier 1-9 缺失', missTier);
+
+      // 材料骨架必须随 tier 单调递增（三阶当量的前提：高品天然值钱）
+      const sorted = priceRows.filter((p) => p.cat === '材料').sort((a, b) => a.tier - b.tier);
+      const notMono: string[] = [];
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i].base <= sorted[i - 1].base) notMono.push(`t${sorted[i - 1].tier}(${sorted[i - 1].base})≥t${sorted[i].tier}(${sorted[i].base})`);
+      }
+      agg('价格骨架 材料基准价非单调递增', notMono);
+
+      // 名品必须不可售（它是成就物不是货；一旦能卖会压制成品种类）
+      agg('价格 名品未标记不可售', items.filter((i) => i.cat === '名品' && i.sellable).map((i) => i.tag));
+
+      // 除名品外所有物品都应有正价（成品按配方推导，漏配 = 配方缺失）
+      agg(
+        '价格 物品缺基准价',
+        items.filter((i) => i.cat !== '名品' && !(i.price > 0)).map((i) => `${i.tag}(${i.cat})`),
+      );
+    }
   }
 
   return { config, warnings };

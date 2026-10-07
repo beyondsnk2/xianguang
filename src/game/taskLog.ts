@@ -23,7 +23,11 @@ export interface TaskRecordInput {
   evalTier: number;
   evalMult: number;
   rewards: RewardItem[];
-  attrXp: Partial<Record<AttrKey, number>>;
+  /**
+   * 本次任务发放的**属性**经验。V4 R1 删掉临时属性桥后恒为空（四维只由随机事件积累，
+   * 见 `event.ts` 结算段）；字段保留仅为兼容旧版明细表的列顺序，勿据此判断属性来源。
+   */
+  attrXp?: Partial<Record<AttrKey, number>>;
   skill: string;
   skillXp: number;
 }

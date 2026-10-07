@@ -21,8 +21,10 @@ import {
   REL_FIRST_MEET,
 } from './constants';
 import { addAttrXp } from './attrGain';
-import { addSkillXp } from './skill';
+import { addSkillXp, skillTier } from './skill';
 import { addItem } from './inventory';
+import { tierPrice } from './economy';
+import { BOUNTY_MULT } from './constants';
 import { emitEvent } from './events';
 import {
   maybeFirstMeet,
@@ -67,6 +69,8 @@ export interface EventOptionDef {
   /** 方案2（属性经验 vs 技能经验）：本选项给「技能经验」（与 attr/xp 二选一或并存），须与事件主题贴合 */
   skill?: string;
   skillXp?: [number, number];
+  /** E0b 赏金：本选项给「金钱」（同一事件至多一个 money 选项；选钱 = 放弃属性/物品/好感，红线⑤ 附则）。金额 = round(price[材料|玩家档位] × BOUNTY_MULT) */
+  money?: boolean;
 }
 
 export interface EventDef {
@@ -106,7 +110,11 @@ const ITEM_CAT_ALIAS: Record<string, string> = { mat: '材料', rare: '稀有', 
  * 只用 cfg、不用 state：好感通配符不指名具体武将，物品类别不指定具体物品，
  * 与结算侧（randomItemTag / maybeFirstMeet）保持同样的不确定性。
  */
-export function describeOptionRewards(cfg: GameConfig, o: Pick<EventDef, 'attr' | 'xp' | 'favorNpc' | 'favor' | 'item' | 'itemNum' | 'jianwen' | 'jianwenName' | 'skill' | 'skillXp'>): string {
+export function describeOptionRewards(cfg: GameConfig, o: {
+  attr?: AttrKey; xp?: [number, number]; favorNpc?: string; favor?: number;
+  item?: string; itemNum?: number; jianwen?: string; jianwenName?: string;
+  skill?: string; skillXp?: [number, number]; money?: boolean;
+}): string {
   const parts: string[] = [];
   const rng = (r: [number, number]) => (r[0] === r[1] ? `${r[0]}` : `${r[0]}~${r[1]}`);
   if (o.attr && o.xp) parts.push(`${ATTR_NAMES[o.attr]}经验 +${rng(o.xp)}`);
@@ -128,6 +136,7 @@ export function describeOptionRewards(cfg: GameConfig, o: Pick<EventDef, 'attr' 
     const cat = ITEM_CAT_ALIAS[o.item];
     parts.push(cat ? `得 ${cat}物品 ×${n}` : `得 ${cfg.itemByTag[o.item]?.name ?? o.item} ×${n}`);
   }
+  if (o.money) parts.push('获赏金（随进度）');
   if (o.jianwen) parts.push(`见闻「${o.jianwenName ?? o.jianwen}」`);
   return parts.join(' · ');
 }
@@ -296,6 +305,7 @@ const EN: EventDef[] = [
     options: [
       { text: '以货易货', item: 'craft', itemNum: 1 },
       { text: '问西域事', skill: 'envoy', skillXp: [5, 9] },
+      { text: '代传口信，受酬金', money: true },
     ],
   },
   {
@@ -354,6 +364,7 @@ const CH: EventDef[] = [
     options: [
       { text: '出手相救', attr: 'politics', xp: [6, 8], favorNpc: '?', favor: 3 },
       { text: '继续赶路', attr: 'leadership', xp: [2, 4] },
+      { text: '受其家人酬谢', money: true },
     ],
   },
   {
@@ -540,7 +551,8 @@ const DP: EventDef[] = [
     facility: 'smith', weightBase: 22, weightSkill: 8, rarity: 0,
     options: [
       { text: '应战共锻', attr: 'force', xp: [6, 10], item: 'craft', itemNum: 1 },
-      { text: '虚心求教', skill: 'smithing', skillXp: [8, 12] },
+      { text: '虚心求教', skill: 'smithing', skillXp: [8,12] },
+      { text: '受老匠赠银', money: true },
     ],
   },
   {
@@ -587,6 +599,7 @@ const DP: EventDef[] = [
     options: [
       { text: '代为移译', skill: 'envoy', skillXp: [8, 12] },
       { text: '荐举他人', attr: 'politics', xp: [5, 8], favorNpc: '?', favor: 3 },
+      { text: '受使馆之赏', money: true },
     ],
   },
   {
@@ -624,6 +637,7 @@ const DP: EventDef[] = [
       { text: '论其用人', attr: 'politics', xp: [4, 8], jianwen: 'dp_yingxiong', jianwenName: '酒肆论英雄' },
       { text: '论其用兵', attr: 'leadership', xp: [4, 8] },
       { text: '论其成败', attr: 'intelligent', xp: [4, 8] },
+      { text: '受座中客宴请之资', money: true },
     ],
   },
 ];
@@ -712,7 +726,7 @@ function weightedPick(state: GameState, pool: EventDef[], lag: Set<AttrKey>): Ev
 
 /** 触发一次机会（容器满 / 达每日上限 → 不生成；压力落在"在线不处理"） */
 export function tryTriggerEvent(state: GameState, ctx: TriggerCtx): boolean {
-  const now = Date.now();
+  const now = state.simNow;
   const day = dayKey(now);
   if (state.eventDay !== day) {
     state.eventDay = day;
@@ -785,7 +799,7 @@ export function advanceEventClock(state: GameState, cfg: GameConfig, dt: number)
  * 仅当待处理数 > EVENT_KEEP_MIN 时，超时的旧事件才会被清掉。
  */
 export function expireEvents(state: GameState): void {
-  const now = Date.now();
+  const now = state.simNow;
   for (let i = state.pending.length - 1; i >= 0; i--) {
     if (state.pending[i].expireAt > now) continue;
     // 保底：已 ≤ EVENT_KEEP_MIN 条则停止丢弃，最近的 N 条（含已超时但被保底的）全部保留
@@ -801,7 +815,17 @@ export function expireEvents(state: GameState): void {
 function randomItemTag(state: GameState, cfg: GameConfig, aliasOrTag: string): string {
   const cat = ITEM_CAT_ALIAS[aliasOrTag];
   if (!cat) return aliasOrTag;
-  const pool = cfg.items.filter((it) => it.cat === cat);
+  let pool = cfg.items.filter((it) => it.cat === cat);
+  // 红线延伸：图纸是制造解锁门槛，事件赠礼不得绕过它。
+  // 成品只从「已解锁」的里面给（q1-3 天生会 + 已持有对应图纸），否则玩家没图就白拿神兵，解锁节奏失效。
+  if (cat === '成品') {
+    const owned = new Set(state.blueprints);
+    const ok = pool.filter((it) => {
+      const r = cfg.recipeByResult[it.tag];
+      return !r || !r.needBlueprint || owned.has(r.needBlueprint);
+    });
+    if (ok.length) pool = ok;
+  }
   const hit = pickOne(state, pool);
   return hit?.tag ?? aliasOrTag;
 }
@@ -817,6 +841,7 @@ interface RewardView {
   jianwenName?: string;
   skill?: string;
   skillXp?: [number, number];
+  money?: boolean;
 }
 
 function applyFavor(state: GameState, who: string, amount: number): string {
@@ -905,8 +930,9 @@ export function resolveEvent(
   const def = eventByTag[pe.tag];
   state.pending.splice(idx, 1);
   if (!def) return null;
+  state.stats.eventsSettled = (state.stats.eventsSettled ?? 0) + 1;
 
-  const now = Date.now();
+  const now = state.simNow;
   if (def.onceOnly && !state.doneEvents.includes(def.tag)) state.doneEvents.push(def.tag);
   if (def.coolDown) state.eventCooldown[def.tag] = now + def.coolDown * 1000;
 
@@ -915,12 +941,12 @@ export function resolveEvent(
     ? {
         attr: opt.attr, xp: opt.xp, favorNpc: opt.favorNpc, favor: opt.favor,
         item: opt.item, itemNum: opt.itemNum, jianwen: opt.jianwen, jianwenName: opt.jianwenName,
-        skill: opt.skill, skillXp: opt.skillXp,
+        skill: opt.skill, skillXp: opt.skillXp, money: opt.money,
       }
     : {
         attr: def.attr, xp: def.xp, favorNpc: def.favorNpc, favor: def.favor,
         item: def.item, itemNum: def.itemNum, jianwen: def.jianwen, jianwenName: def.jianwenName,
-        skill: def.skill, skillXp: def.skillXp,
+        skill: def.skill, skillXp: def.skillXp, money: undefined,
       };
 
   const lines: RewardLine[] = [];
@@ -974,6 +1000,21 @@ export function resolveEvent(
     const tag = randomItemTag(state, cfg, rw.item);
     addItem(state, tag, n);
     lines.push({ icon: '物', text: `得 ${cfg.itemByTag[tag]?.name ?? tag} ×${n}` });
+  }
+
+  // ④-b 赏金（E0b）：仅部分事件带钱选项；同一事件至多一个 money 选项（选钱 = 放弃属性/物品/好感，红线⑤ 附则）。
+  // 金额随玩家档位自动放大（早期小、晚期大），全周期成立。
+  if (rw.money) {
+    let tier = 1;
+    for (const s of Object.values(state.skills)) tier = Math.max(tier, skillTier(s.lv));
+    tier = Math.max(1, Math.min(9, tier));
+    const amount = Math.round(tierPrice(cfg, tier) * BOUNTY_MULT);
+    if (amount > 0) {
+      state.money += amount;
+      state.stats.moneyEarned += amount;
+      state.stats.moneyEarnedBounty += amount;
+      lines.push({ icon: '金', text: `赏金 +${amount} 文` });
+    }
   }
 
   // ⑤ 见闻（最小形态：只记录 + 归档，不做图鉴/解锁）

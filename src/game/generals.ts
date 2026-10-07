@@ -14,7 +14,7 @@ import {
   REL_TARGET_MULT,
   REL_FIRST_MEET,
   REL_FIRST_MEET_CHANCE,
-  ATTR_LEAD_CHANCE,
+  DEED_LEAD_CHANCE,
   CLS_TO_ATTR,
 } from './constants';
 import type { AttrKey, GameState, TaskDef } from './types';
@@ -115,7 +115,7 @@ export function propagateDeed(state: GameState, def: TaskDef): void {
   const shown = new Set<AttrKey>();
   const main = CLS_TO_ATTR[def.cls];
   if (main) shown.add(main);
-  if (randFloat(state) < ATTR_LEAD_CHANCE) shown.add('leadership');
+  if (randFloat(state) < DEED_LEAD_CHANCE) shown.add('leadership');
   propagateDeedAttrs(state, shown);
 }
 

@@ -1,13 +1,17 @@
-"""生成 V2 任务/材料/制造品/拜访人物 的实际配置 xlsx。
+"""生成 V5 任务/材料/制造品/稀有料/图纸 的实际配置 xlsx。
 
-9 品质全扩版（2026-10-03）：任务/材料/制成品/稀有料/配方全部按品质 1-9 各成一档。
-- 9 类技能 × 9 品质 = 81 个任务基型（taskTpl + 运行时 task 两表）。
-- 材料：每 A 技能 2~3 种材料，品质 q 轮转分配材料类型、档位=q；每种材料间隔出现，
-  但每技能材料合起来覆盖 1-9 全部档（咬合成立：B_q 总能在配对 A 技能处取到 tier-q 料）。
-- 稀有料：9 种 × 品质 4-9 = 54。
-- 制成品：35 族 × 9 品质 = 315。
-- 配方：35 族 × 9 品质 = 315；咬合 n品B = n品A料(量) + n品C稀有料(质)；
-  门槛 1-3 无料无图 / 4-6 需稀有料无图 / 7-9 需图+稀有料。
+2026-10-07 结构重构（替代旧的「35 成品族 × 9 品质」笛卡尔积）：
+- 旧结构病根：族名已隐含品质段，却又 ×9 品质 → 产出「1 品青釭剑」「9 品环首刀」等语义垃圾，
+  且 B 任务只造 3 个代表族 → 32 死配方族 + 6 孤儿稀有。
+- 新结构：品质三段（初段 q1-3 / 中段 q4-6 / 上段 q7-9）× 每段 4 物品族 × 每族 3 阶。
+  → 12 物品族/技能 × 3 阶 = 36 成品/技能，共 108 成品 + 108 配方。
+- A 材料：每 A 技能按段固定材料类型（3 段 × 3 阶）= 9 种/技能，共 27（不变）。
+- C 稀有：每 C 技能仅中段/上段（6 个品质）= 6 种/技能，共 18（原 54）。初段无 C。
+- 图纸：1 图 = 1 物品族，段内三阶共用；q1-3 天生会（needBlueprint 留空），q4 起全部需要 → 24 张。
+- 配方两层需求：
+    基础层 = 本技能配对 A 的同阶料 + 本技能配对 C 的同阶稀有（初段无 C 项）
+    额外层 = 其他 A 技能的 (q-1) 阶料 + 其他 C 技能的 (q-1) 阶稀有（q-1<4 时无 C 项）
+  额外层 (其他A × 其他C) = 2×2 = 4 种组合 → 天然区分每段 4 个物品族。
 
 策略：加载现有 xlsx（保留地图与运行表），覆写 skill/item/recipe/blueprint/taskTpl/task。
 一次性脚本，改设计后重跑即可。
@@ -18,7 +22,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-SRC = Path(r"I:/buddyWork/sanWalk/config/firstShow_V3.xlsx")
+SRC = Path(r"I:/buddyWork/sanWalk/config/firstShow_V4.xlsx")
 
 HDR_FILL = PatternFill("solid", fgColor="FF4472C4")
 HDR_FONT = Font(name="Microsoft YaHei", size=10, bold=True, color="FFFFFFFF")
@@ -55,6 +59,26 @@ def _write(wb, title, headers, rows, widths, tier_col=None):
     ws.freeze_panes = "A2"
 
 
+# ---------------------------------------------------------------- 段 / 阶
+SEG_NAME = {1: "初段", 2: "中段", 3: "上段"}
+RANK_NAME = {1: "一阶", 2: "二阶", 3: "三阶"}
+
+
+def seg_of(q: int) -> int:
+    """品质 → 段（1-3）"""
+    return (q - 1) // 3 + 1
+
+
+def rank_of(q: int) -> int:
+    """品质 → 段内阶（1-3）"""
+    return (q - 1) % 3 + 1
+
+
+def qname(prefix: str, q: int) -> str:
+    """物品/任务全名：{名}·{段名}{阶名}，例「中段·二阶偃月刀」"""
+    return f"{prefix}·{SEG_NAME[seg_of(q)]}{RANK_NAME[rank_of(q)]}"
+
+
 # ---------------------------------------------------------------- skill
 SKILLS = [
     # tag, name, cls, mainNode, nodeName, pointCities, note
@@ -68,186 +92,212 @@ SKILLS = [
     ("sworn", "结义", "C", "ground", "校场", "蓟;濮阳;下邳;陈留 + 武威(副);濮阳(副)", "结交/结义/歃血"),
     ("envoy", "出使", "C", "embassy", "使馆", "许昌;会稽;交趾;南海 + 洛阳(副);建业(副)", "通使/持节/远交"),
 ]
-
-# A 技能 → 2~3 种材料（品质 q 轮转分配材料类型，档位=q）
-A_SKILL_MATS = {
-    "mining": [("iron", "铁矿石"), ("copper", "铜矿石"), ("jade", "玉石料")],
-    "herbalism": [("herb", "草药"), ("yicao", "异草")],
-    "hunting": [("skin", "兽皮"), ("wild", "野味")],
-}
-# B 技能 → 配对 A 技能（咬合：B_q 吃配对 A 技能 tier-q 材料）
-B_PAIRED_A = {"smithing": "mining", "alchemy": "herbalism", "crafting": "hunting"}
-# B 技能 → 上品制造前置图纸
-B_BLUEPRINT = {"smithing": "jie_yi_tu", "alchemy": "fang_dao_tu", "crafting": "chu_shi_tu"}
-# B 技能 → 代表制成品族（task 直接产出该族 tier-q 基型）
-B_REP_PRODUCT = {"smithing": "huan_shou_dao", "alchemy": "jin_chuang_yao", "crafting": "nu_ji"}
-
-# ---------------------------------------------------------------- item
-# 材料：品质 q → 类型 mats[(q-1)%n]，档位=q。每种材料间隔出现，但技能材料合覆盖 1-9。
-ITEMS = []
-for sk, mats in A_SKILL_MATS.items():
-    n = len(mats)
-    for q in range(1, 10):
-        base, nm = mats[(q - 1) % n]
-        ITEMS.append((f"{base}_{q}", f"{nm}·{q}品", "材料", base, q, q, q, 99, "A类", f"品质{q}；{sk}产出"))
-
-RARE = [
-    ("jingtie", "精铁", "晋阳;邺", "smithing"),
-    ("xuantie", "玄铁", "武威;西平", "smithing"),
-    ("xuelian", "雪莲", "西平", "alchemy"),
-    ("longwenyu", "龙纹玉", "天水", "crafting"),
-    ("xijiao", "犀角", "长沙", "crafting"),
-    ("zhusha", "朱砂", "襄阳;江陵", "alchemy"),
-    ("bainianshen", "百年参", "成都", "alchemy"),
-    ("cansi", "蚕丝", "下邳;广陵;吴;建业", "crafting"),
-    ("nanyao", "南药", "交趾;南海", "crafting"),
-]
-# 稀有料：9 种 × 品质 4-9（红线⑤ 稀有料品质下界≥4）
-for tag, name, cities, skill in RARE:
-    for q in range(4, 10):
-        ITEMS.append((f"{tag}_{q}", f"{name}·{q}品", "稀有", tag, q, q, q, 99, "C类独占", f"产出城:{cities};品质{q}"))
-
-# 制成品族（35）： tag,name,bskill,rare_tag,cityCraft,cityRare,cityBlueprint,note
-PRODUCT_FAMILIES = [
-    # 下品 品质1（6；下品1-3无料无图，中品起按品质取稀有料）
-    ("huan_shou_dao", "环首刀", "smithing", "jingtie", "晋阳", "邺", "", "基础兵器"),
-    ("mao_tou", "矛头", "smithing", "jingtie", "晋阳", "邺", "", "基础兵器"),
-    ("jin_chuang_yao", "金创药", "alchemy", "zhusha", "襄阳", "江陵", "", "外伤药"),
-    ("tang_ji", "汤剂", "alchemy", "zhusha", "襄阳", "江陵", "", "内服剂"),
-    ("nu_ji", "弩机", "crafting", "cansi", "洛阳", "建业", "", "基础军械"),
-    ("zi_che", "辎车", "crafting", "cansi", "洛阳", "建业", "", "运输"),
-    # 下品 品质2（6）
-    ("zha_jia_pian", "札甲片", "smithing", "xuantie", "晋阳", "武威", "", "基础护甲片"),
-    ("tie_zu", "铁镞", "smithing", "xuantie", "晋阳", "武威", "", "箭矢料"),
-    ("shang_yao", "伤药", "alchemy", "bainianshen", "襄阳", "成都", "", "进阶外伤"),
-    ("jie_du_san", "解毒散", "alchemy", "bainianshen", "襄阳", "成都", "", "解毒"),
-    ("che_ju", "车具", "crafting", "longwenyu", "洛阳", "天水", "", "通用件"),
-    ("mu_xie", "木械", "crafting", "xijiao", "洛阳", "长沙", "", "工具"),
-    # 下品 品质3（3，需稀有料无图）
-    ("ma_zhang", "马掌", "smithing", "jingtie", "晋阳", "邺", "", "坐骑具"),
-    ("xing_shen_dan", "醒神丹", "alchemy", "zhusha", "襄阳", "江陵", "", "提神"),
-    ("diao_gou", "钓钩", "crafting", "cansi", "洛阳", "下邳", "", "渔具"),
-    # 中品 品质4-6（10，需稀有料无图）
-    ("heng_dao", "横刀", "smithing", "jingtie", "长安", "邺", "", "需精铁"),
-    ("ming_guang_jia", "明光甲片", "smithing", "xuantie", "晋阳", "武威", "", "需玄铁"),
-    ("ma_shuo", "马槊", "smithing", "jingtie", "江夏", "晋阳", "", "需精铁"),
-    ("huan_hun_san", "还魂散", "alchemy", "zhusha", "宛", "襄阳", "", "需朱砂"),
-    ("fu_shui", "符水", "alchemy", "bainianshen", "江陵", "成都", "", "需百年参"),
-    ("da_huan_dan", "大还丹", "alchemy", "zhusha", "柴桑", "江陵", "", "需朱砂"),
-    ("qiang_nu_ji", "强弩机", "crafting", "cansi", "洛阳", "建业", "", "需蚕丝"),
-    ("lian_nu", "连弩", "crafting", "cansi", "梓潼", "下邳", "", "需蚕丝"),
-    ("yun_ti", "云梯", "crafting", "longwenyu", "江州", "天水", "", "需龙纹玉"),
-    ("zhi_nan_che", "指南车", "crafting", "xijiao", "邺", "长沙", "", "需犀角"),
-    # 上品 品质7-9（10，需稀有料+图纸）
-    ("qing_gang_jian", "青釭剑", "smithing", "jingtie", "西平", "邺", "下邳", "需精铁+结义图"),
-    ("lian_huan_kai", "连环铠", "smithing", "xuantie", "晋阳", "武威", "下邳", "需玄铁+结义图"),
-    ("fang_tian_hua_ji", "方天画戟", "smithing", "jingtie", "江夏", "晋阳", "武威", "需精铁+结义图"),
-    ("jiu_zhuan", "九转还魂丹", "alchemy", "bainianshen", "江陵", "成都", "汉中", "需百年参+访道图"),
-    ("tai_qing_dan", "太清丹", "alchemy", "zhusha", "许昌", "襄阳", "成都", "需朱砂+访道图"),
-    ("yu_qing_dan", "玉清丹", "alchemy", "xuelian", "柴桑", "西平", "成都", "需雪莲+访道图"),
-    ("mu_niu", "木牛流马", "crafting", "nanyao", "梓潼", "交趾", "建业", "需南药+出使图"),
-    ("lian_nu_gai", "连弩改良", "crafting", "cansi", "洛阳", "建业", "南海", "需蚕丝+出使图"),
-    ("pi_li_che", "霹雳车", "crafting", "xijiao", "长安", "长沙", "洛阳", "需犀角+出使图"),
-    ("lou_chuan", "楼船", "crafting", "longwenyu", "江州", "天水", "建业", "需龙纹玉+出使图"),
-]
-# 制成品：35 族 × 9 品质
-for tag, name, bskill, rare, cc, cr, cb, note in PRODUCT_FAMILIES:
-    for q in range(1, 10):
-        ITEMS.append((f"{tag}_{q}", f"{name}·{q}品", "成品", tag, q, q, q, 9, "B类", f"{note};品质{q}"))
-
-# 名品（C 类上品赠礼，少量占位）
-for tag, name in [("mingqi_jade", "名器图样"), ("mingqi_talisman", "符箓名品"), ("mingqi_exotic", "异邦名品")]:
-    ITEMS.append((tag, name, "名品", "C类", "名品", 7, 9, 9, "C类上品", "人物赠礼"))
-
-# ---------------------------------------------------------------- recipe
-# 35 族 × 9 品质 = 315。列：tag,name,skill,quality,needItem1,needItem1Num,matQualityFloor,
-#   needRare,needBlueprint,resultItem,resultNum,cityCraft,cityRare,cityBlueprint,note
-RECIPES = []
-for tag, name, bskill, rare, cc, cr, cb, note in PRODUCT_FAMILIES:
-    askill = B_PAIRED_A[bskill]
-    mats = A_SKILL_MATS[askill]
-    mn = len(mats)
-    for q in range(1, 10):
-        base, _ = mats[(q - 1) % mn]
-        need1 = f"{base}_{q}"
-        need1num = 2 + (q - 1) // 2          # 2,2,3,3,4,4,5,5,6
-        needRare = f"{rare}_{q}" if (rare and q >= 4) else ""
-        needBp = B_BLUEPRINT[bskill] if q >= 7 else ""
-        RECIPES.append((
-            f"{tag}_{q}", name, bskill, q, need1, need1num, q,
-            needRare, needBp, f"{tag}_{q}", 1, cc, cr, cb,
-            f"咬合:{need1}+{(needRare or '无稀有')}{(('+' + needBp) if needBp else '')}",
-        ))
-
-# ---------------------------------------------------------------- blueprint
-BLUEPRINTS = [
-    ("jie_yi_tu", "结义图（名器图样）", "sworn", "结义线产出，上品制造前置"),
-    ("fang_dao_tu", "访道图（符箓图）", "visiting", "访道线产出，上品制造前置"),
-    ("chu_shi_tu", "出使图（异邦图）", "envoy", "出使线产出，上品制造前置"),
-]
-
-# ---------------------------------------------------------------- taskTpl + task（81 基型）
-# taskTpl 列：tag,name,cls,skill,quality,attrBaseline,taskName,mainOutput,outputBase,evalInc,subOutput,nodeType,nodeName,note
-# task 列：tag,name,nodeType,nodeName,needTime,getItem,getItemNum,getAttrXp,getAttrXpNum,
-#         attrBaseline,cls,skill,quality,pinjie,evalInc,mainOutput,subOutput,note
-# attrBaseline = int(品阶*4) = 4..36（品阶=品质 1-9，每层独立基准）。
-# 评价四档增量统一 EVAL_STD；getAttrXp 留 None（任务不发属性）；C 类 getItem 空（好感未接）。
-EVAL_STD = "0.0/0.3/0.6/1.0"
 SKILL_NODE = {
     "mining": ("mine", "矿场"), "herbalism": ("herb", "药圃"), "hunting": ("hunt", "猎场"),
     "smithing": ("smith", "铁匠铺"), "alchemy": ("alchemy", "丹房"), "crafting": ("workshop", "机巧坊"),
     "visiting": ("temple", "道观"), "sworn": ("ground", "校场"), "envoy": ("embassy", "使馆"),
 }
-A_NAMES = [("采石", "开矿", "凿岩"), ("采草", "寻药", "探幽"), ("围猎", "入山", "逐珍")]
-B_NAMES = [("锻铁", "铸兵", "锻甲"), ("炼药", "炼丹", "炼大丹"), ("制械", "造器", "机关")]
-C_NAMES = [("寻访", "论道", "问道"), ("结交", "结义", "歃血"), ("通使", "持节", "远交")]
-C_FAV = [20, 20, 20, 30, 30, 30, 40, 40, 40]  # 好感基数（按品质 1-9）
+# 只取主城市（" + " 之前），用于配方三城互异
+SKILL_CITIES = {
+    "mining": ["上党", "南皮", "济南", "天水", "长沙"],
+    "herbalism": ["平原", "河内", "广陵", "谯", "吴"],
+    "hunting": ["北平", "襄平", "小沛", "汝南", "庐江"],
+    "smithing": ["晋阳", "邺", "武威", "西平", "江夏"],
+    "alchemy": ["襄阳", "宛", "江陵", "柴桑", "成都"],
+    "crafting": ["洛阳", "长安", "建业", "梓潼", "江州"],
+    "visiting": ["汉中", "北海", "安定", "新野"],
+    "sworn": ["蓟", "濮阳", "下邳", "陈留"],
+    "envoy": ["许昌", "会稽", "交趾", "南海"],
+}
 
+# ---------------------------------------------------------------- 咬合配对
+# B → 配对 A（基础层材料）；B → 配对 C（基础层稀有 / 图纸产出方）
+B_PAIRED_A = {"smithing": "mining", "alchemy": "herbalism", "crafting": "hunting"}
+B_PAIRED_C = {"smithing": "sworn", "alchemy": "visiting", "crafting": "envoy"}
+A_SKILLS = ["mining", "herbalism", "hunting"]
+C_SKILLS = ["visiting", "sworn", "envoy"]
+# 「其他」技能 = 非配对的另外两个，用于额外层
+OTHER_A = {b: [a for a in A_SKILLS if a != B_PAIRED_A[b]] for b in B_PAIRED_A}
+OTHER_C = {b: [c for c in C_SKILLS if c != B_PAIRED_C[b]] for b in B_PAIRED_C}
 
-def _qname(base, q):
-    return f"{base}·{q}品"
+# A 材料：每技能按段固定一种材料（段内三阶 = 品质）
+A_MATS = {
+    "mining": [("iron", "铁矿石"), ("copper", "铜矿石"), ("jade", "玉石料")],
+    "herbalism": [("herb", "草药"), ("yicao", "异草"), ("lingzhi", "灵芝")],
+    "hunting": [("skin", "兽皮"), ("wild", "野味"), ("shougu", "兽骨")],
+}
+# C 稀有：每技能仅中段(2)/上段(3)各一种，品质 4-9（红线⑤ 稀有品质下界 ≥4）
+# C 稀有：每 C 技能 2 种，idx0 供中段、idx1 供上段（配方按段选）。
+# ⚠ 关键：**每种都要覆盖 q4-9 全部 6 个品质**，不能按段切分。
+#    曾按段切（jingtie 只 q4-6 / xuantie 只 q7-9），结果后期 C 任务全在 q7-9，
+#    weightedPick 抽到 jingtie 时 `jingtie_7` 不存在 → 该次产出直接作废（实测 jingtie 供需 0.10）；
+#    而 q7 制造的额外层偏要 q6 的中段稀有 → 永远拿不到。改回全品质覆盖后不再浪费。
+C_RARES = {
+    "sworn": [("jingtie", "精铁"), ("xuantie", "玄铁")],
+    "visiting": [("zhusha", "朱砂"), ("xuelian", "雪莲")],
+    "envoy": [("cansi", "蚕丝"), ("longwenyu", "龙纹玉")],
+}
 
+# ---------------------------------------------------------------- 物品族（3 技能 × 3 段 × 4 = 36）
+PRODUCT_FAMILIES = {
+    # 初段 2 族（前期信息量最小；q1 无额外层，故两族配方天然一致，靠「少」而非「异」降低学习成本）
+    # 中段/上段 各 4 族（额外层 2×2 组合在此展开）
+    "smithing": [
+        [("huan_shou_dao", "环首刀"), ("zha_jia_pian", "札甲片")],
+        [("heng_dao", "横刀"), ("ma_shuo", "马槊"), ("ming_guang_jia", "明光甲片"), ("yan_yue_dao", "偃月刀")],
+        [("qing_gang_jian", "青釭剑"), ("fang_tian_hua_ji", "方天画戟"),
+         ("lian_huan_kai", "连环铠"), ("zhang_ba_she_mao", "丈八蛇矛")],
+    ],
+    "alchemy": [
+        [("jin_chuang_yao", "金创药"), ("tang_ji", "汤剂")],
+        [("huan_hun_san", "还魂散"), ("fu_shui", "符水"), ("da_huan_dan", "大还丹"), ("xing_shen_dan", "醒神丹")],
+        [("jiu_zhuan", "九转还魂丹"), ("tai_qing_dan", "太清丹"),
+         ("yu_qing_dan", "玉清丹"), ("shang_qing_dan", "上清丹")],
+    ],
+    "crafting": [
+        [("nu_ji", "弩机"), ("zi_che", "辎车")],
+        [("qiang_nu_ji", "强弩机"), ("lian_nu", "连弩"), ("yun_ti", "云梯"), ("zhi_nan_che", "指南车")],
+        [("mu_niu", "木牛流马"), ("pi_li_che", "霹雳车"), ("lou_chuan", "楼船"), ("lian_nu_gai", "连弩改良")],
+    ],
+}
+
+# ---------------------------------------------------------------- item
+ITEMS = []
+# 材料：3 技能 × 3 段 × 3 阶 = 27
+for sk, mats in A_MATS.items():
+    for seg_i, (base, nm) in enumerate(mats, start=1):
+        for rank in (1, 2, 3):
+            q = (seg_i - 1) * 3 + rank
+            ITEMS.append((f"{base}_{q}", qname(nm, q), "材料", base, q, q, q, 99, "A类", f"{SEG_NAME[seg_i]}{sk}产出"))
+# 稀有：3 技能 × 2 种 × 品质 4-9 = 18；初段无 C（红线⑤）
+for sk, rares in C_RARES.items():
+    for base, nm in rares:
+        for q in range(4, 10):
+            ITEMS.append((f"{base}_{q}", qname(nm, q), "稀有", base, q, q, q, 99, "C类独占",
+                          f"产出:{';'.join(SKILL_CITIES[sk])}"))
+# 成品：36 族 × 3 阶 = 108
+for bs, segs in PRODUCT_FAMILIES.items():
+    for seg_i, fams in enumerate(segs, start=1):
+        for ftag, fname in fams:
+            for rank in (1, 2, 3):
+                q = (seg_i - 1) * 3 + rank
+                ITEMS.append((f"{ftag}_{q}", qname(fname, q), "成品", ftag, q, q, q, 9, "B类",
+                              f"{SEG_NAME[seg_i]}{bs}制造"))
+# 名品（C 类上品赠礼，少量占位）
+for tag, name in [("mingqi_jade", "名器图样"), ("mingqi_talisman", "符箓名品"), ("mingqi_exotic", "异邦名品")]:
+    ITEMS.append((tag, name, "名品", "C类", "名品", 7, 9, 9, "C类上品", "人物赠礼"))
+
+# ---------------------------------------------------------------- recipe（108）
+# 列：tag,name,skill,quality,needItem1,needItem1Num,matQualityFloor,needRare,
+#     needItem2,needItem2Num,needRare2,needBlueprint,resultItem,resultNum,
+#     cityCraft,cityRare,cityBlueprint,note
+RECIPES = []
+for bs, segs in PRODUCT_FAMILIES.items():
+    askill = B_PAIRED_A[bs]
+    cskill = B_PAIRED_C[bs]
+    oa, oc = OTHER_A[bs], OTHER_C[bs]
+    b_cities, c_cities = SKILL_CITIES[bs], SKILL_CITIES[cskill]
+    for seg_i, fams in enumerate(segs, start=1):
+        for idx, (ftag, fname) in enumerate(fams):
+            # 额外层组合：4 族时取 (其他A × 其他C) 的 2×2 全组合；
+            # 2 族（初段）时取对角 (0,0)/(1,1)，让两个族在 A、C 两个维度上都不同，差异最大化
+            if len(fams) == 2:
+                oa_skill, oc_skill = oa[idx], oc[idx]
+            else:
+                oa_skill, oc_skill = oa[idx % 2], oc[idx // 2]
+            for rank in (1, 2, 3):
+                q = (seg_i - 1) * 3 + rank
+                # 基础层
+                need1 = f"{A_MATS[askill][seg_i - 1][0]}_{q}"
+                need1num = 2 + (q - 1) // 2                       # 2,2,3,3,4,4,5,5,6
+                need_rare = f"{C_RARES[cskill][seg_i - 2][0]}_{q}" if seg_i >= 2 else ""
+                # 额外层（q-1 阶；q=1 无额外层）
+                q2 = q - 1
+                need2 = f"{A_MATS[oa_skill][seg_of(q2) - 1][0]}_{q2}" if q2 >= 1 else ""
+                need2num = (1 + (q - 1) // 3) if q2 >= 1 else 0    # 1,1,2,2,2,3,3,3,3
+                need_rare2 = f"{C_RARES[oc_skill][seg_of(q2) - 2][0]}_{q2}" if q2 >= 4 else ""
+                # 图纸：q1-3 天生会（留空），q4 起全部需要
+                need_bp = f"bp_{ftag}" if q >= 4 else ""
+                slot = (seg_i - 1) * 4 + idx
+                cc = b_cities[slot % len(b_cities)]
+                cr = c_cities[slot % len(c_cities)]
+                cb = c_cities[(slot + 1) % len(c_cities)]
+                assert len({cc, cr, cb}) == 3, f"三城互异失败 {ftag}_{q}: {cc}/{cr}/{cb}"
+                parts = [need1]
+                if need_rare:
+                    parts.append(need_rare)
+                if need2:
+                    parts.append(f"{need2}(额外)")
+                if need_rare2:
+                    parts.append(f"{need_rare2}(额外)")
+                RECIPES.append((
+                    f"{ftag}_{q}", fname, bs, q,
+                    need1, need1num, q,
+                    need_rare,
+                    need2, need2num, need_rare2,
+                    need_bp, f"{ftag}_{q}", 1,
+                    cc, cr, cb,
+                    f"咬合:{' + '.join(parts)}",
+                ))
+
+# ---------------------------------------------------------------- blueprint（24）
+# 1 图 = 1 物品族，段内三阶共用；q1-3 天生会 → 只给中段/上段 8 族/技能
+BLUEPRINTS = []
+for bs, segs in PRODUCT_FAMILIES.items():
+    cskill = B_PAIRED_C[bs]
+    for seg_i in (2, 3):
+        for ftag, fname in segs[seg_i - 1]:
+            BLUEPRINTS.append((f"bp_{ftag}", f"{fname}图", cskill,
+                               f"{SEG_NAME[seg_i]}{bs}制造前置；{cskill}线产出"))
+
+# ---------------------------------------------------------------- taskTpl + task（81 基型）
+EVAL_STD = "0.0/0.3/0.6/1.0"
+A_NAMES = {"mining": ["采石", "开矿", "凿岩"], "herbalism": ["采草", "寻药", "探幽"], "hunting": ["围猎", "入山", "逐珍"]}
+B_NAMES = {"smithing": ["锻铁", "铸兵", "锻甲"], "alchemy": ["炼药", "炼丹", "炼大丹"], "crafting": ["制械", "造器", "机关"]}
+C_NAMES = {"visiting": ["寻访", "论道", "问道"], "sworn": ["结交", "结义", "歃血"], "envoy": ["通使", "持节", "远交"]}
+C_FAV = [20, 20, 20, 30, 30, 30, 40, 40, 40]
 
 TASKTPL = []
 TASKS_RUNTIME = []
 for q in range(1, 10):
     abl = q * 4
-    # A 类
-    for i, (sk, nm) in enumerate([("mining", "采掘"), ("herbalism", "采药"), ("hunting", "猎奇")]):
-        mats = A_SKILL_MATS[sk]
-        base, _ = mats[(q - 1) % len(mats)]
+    seg = seg_of(q)
+    # A 类：产出该段对应材料
+    for sk in A_SKILLS:
+        base = A_MATS[sk][seg - 1][0]
         item = f"{base}_{q}"
-        outbase = f"1;{max(2, 13 - q)}"
+        outbase = "8;16" if q >= 7 else f"1;{max(2, 13 - q)}"
         node = SKILL_NODE[sk]
-        tn = _qname(A_NAMES[i][(q - 1) // 3], q)
-        TASKTPL.append((f"{sk}_{q}", nm, "A", sk, q, abl, tn, item, outbase, EVAL_STD,
+        tn = qname(A_NAMES[sk][seg - 1], q)
+        TASKTPL.append((f"{sk}_{q}", sk, "A", sk, q, abl, tn, item, outbase, EVAL_STD,
                         "上等料概率随品质升", node[0], node[1], ""))
         TASKS_RUNTIME.append((f"{sk}_{q}", tn, node[0], node[1], 15 + q * 5, item, outbase,
                               None, None, abl, "A", sk, q, q, EVAL_STD, item, "A类材料",
                               "保底~名义区间；高品数量少但档位高"))
-    # B 类
-    for i, (sk, nm) in enumerate([("smithing", "锻造"), ("alchemy", "丹鼎"), ("crafting", "机巧")]):
-        rep = B_REP_PRODUCT[sk]
-        item = f"{rep}_{q}"
-        cnt = 1 + (q - 1) // 3
+    # B 类：产出在运行时从本段 4 个已解锁物品族中随机选（outputFamilies 列）
+    for sk in ("smithing", "alchemy", "crafting"):
+        fams = PRODUCT_FAMILIES[sk][seg - 1]
+        fam_tags = ";".join(f[0] for f in fams)
+        default_item = f"{fams[0][0]}_{q}"
+        cnt = min(2, 1 + (q - 1) // 3)
         outbase = f"1;{cnt}"
         node = SKILL_NODE[sk]
-        tn = _qname(B_NAMES[i][(q - 1) // 3], q)
-        TASKTPL.append((f"{sk}_{q}", nm, "B", sk, q, abl, tn, item, outbase, EVAL_STD,
+        tn = qname(B_NAMES[sk][seg - 1], q)
+        TASKTPL.append((f"{sk}_{q}", sk, "B", sk, q, abl, tn, default_item, outbase, EVAL_STD,
                         "省料25%·残料返还20%", node[0], node[1], ""))
-        TASKS_RUNTIME.append((f"{sk}_{q}", tn, node[0], node[1], 15 + q * 5, item, outbase,
-                              None, None, abl, "B", sk, q, q, EVAL_STD, item, "B类制成品",
-                              "制成品基型产出；制造效率见 subOutput，运行时未接制造"))
-    # C 类
-    for i, (sk, nm) in enumerate([("visiting", "访道"), ("sworn", "结义"), ("envoy", "出使")]):
+        TASKS_RUNTIME.append((f"{sk}_{q}", tn, node[0], node[1], 15 + q * 5, default_item, outbase,
+                              None, None, abl, "B", sk, q, q, EVAL_STD, default_item, fam_tags,
+                              "mainOutput 为默认占位；运行时从 subOutput 的 4 个已解锁族中随机选实际制造目标"))
+    # C 类：好感 + 稀有 + 图纸
+    for sk in C_SKILLS:
         node = SKILL_NODE[sk]
-        tn = _qname(C_NAMES[i][(q - 1) // 3], q)
+        tn = qname(C_NAMES[sk][seg - 1], q)
         fav = C_FAV[q - 1]
-        TASKTPL.append((f"{sk}_{q}", nm, "C", sk, q, abl, tn, "好感", fav, EVAL_STD,
-                        "图纸/名品(上品段起)", node[0], node[1], ""))
+        TASKTPL.append((f"{sk}_{q}", sk, "C", sk, q, abl, tn, "好感", fav, EVAL_STD,
+                        "图纸/名品", node[0], node[1], ""))
         TASKS_RUNTIME.append((f"{sk}_{q}", tn, node[0], node[1], 15 + q * 5, None, None,
                               None, None, abl, "C", sk, q, q, EVAL_STD, "好感", "C类好感",
-                              f"好感基数 {fav}（运行时未接好感资源，getItem 暂空）；上品段起掉图纸/名品"))
+                              f"好感基数 {fav}；q≥4 起掉图纸；q≥4 起掉稀有"))
 
 
 def build():
@@ -257,28 +307,33 @@ def build():
            SKILLS, [12, 10, 6, 12, 12, 40, 24])
     _write(wb, "item",
            ["tag", "name", "cat", "subCat", "tier", "qMin", "qMax", "stack", "source", "note"],
-           ITEMS, [16, 14, 8, 12, 6, 6, 6, 6, 10, 28], tier_col=3)
+           ITEMS, [16, 22, 8, 16, 6, 6, 6, 6, 10, 24], tier_col=3)
     _write(wb, "recipe",
            ["tag", "name", "skill", "quality", "needItem1", "needItem1Num", "matQualityFloor",
-            "needRare", "needBlueprint", "resultItem", "resultNum", "cityCraft", "cityRare", "cityBlueprint", "note"],
-           RECIPES, [16, 12, 10, 8, 12, 12, 12, 10, 14, 14, 9, 10, 10, 12, 24])
+            "needRare", "needItem2", "needItem2Num", "needRare2", "needBlueprint",
+            "resultItem", "resultNum", "cityCraft", "cityRare", "cityBlueprint", "note"],
+           RECIPES, [16, 12, 10, 8, 12, 12, 12, 12, 12, 12, 12, 14, 14, 9, 10, 10, 12, 46])
     _write(wb, "blueprint",
            ["tag", "name", "fromSkill", "note"],
-           BLUEPRINTS, [16, 24, 12, 40])
+           BLUEPRINTS, [16, 16, 12, 34])
     _write(wb, "taskTpl",
            ["tag", "name", "cls", "skill", "quality", "attrBaseline", "taskName", "mainOutput",
             "outputBase", "evalInc", "subOutput", "nodeType", "nodeName", "note"],
-           TASKTPL, [12, 10, 6, 12, 8, 11, 12, 14, 10, 10, 28, 12, 12, 10], tier_col=3)
+           TASKTPL, [12, 10, 6, 12, 8, 11, 16, 14, 10, 10, 28, 12, 12, 10], tier_col=3)
     _write(wb, "task",
            ["tag", "name", "nodeType", "nodeName", "needTime", "getItem", "getItemNum",
             "getAttrXp", "getAttrXpNum", "attrBaseline", "cls", "skill", "quality",
             "pinjie", "evalInc", "mainOutput", "subOutput", "note"],
-           TASKS_RUNTIME, [12, 10, 10, 12, 9, 16, 12, 10, 12, 11, 6, 12, 8, 7, 12, 14, 30, 34], tier_col=11)
+           TASKS_RUNTIME, [12, 18, 10, 12, 9, 16, 12, 10, 12, 11, 6, 12, 8, 7, 12, 14, 34, 40], tier_col=11)
     wb.save(SRC)
     print("已生成内容表到", SRC)
     print("sheets:", wb.sheetnames)
     print(f"skill={len(SKILLS)} item={len(ITEMS)} recipe={len(RECIPES)} blueprint={len(BLUEPRINTS)} "
           f"taskTpl={len(TASKTPL)} task={len(TASKS_RUNTIME)}")
+    n_prod = sum(1 for i in ITEMS if i[2] == "成品")
+    n_mat = sum(1 for i in ITEMS if i[2] == "材料")
+    n_rare = sum(1 for i in ITEMS if i[2] == "稀有")
+    print(f"成品={n_prod} 材料={n_mat} 稀有={n_rare} 名品={len(ITEMS) - n_prod - n_mat - n_rare}")
 
 
 if __name__ == "__main__":

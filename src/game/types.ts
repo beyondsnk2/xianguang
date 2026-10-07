@@ -82,10 +82,54 @@ export interface ItemDef {
   qMax: number;
   stack: number; // 单格堆叠上限
   source: string; // A类 / B类 / C类独占 / C类上品
+  /** V4 基准价（文）；由 gen_v4_econ.py 推导写入。名品为 0（不可售） */
+  price: number;
+  /** V4 是否可售（名品 = false） */
+  sellable: boolean;
   note: string;
 }
 
-/** 配方表（recipe）：35 制造族 × 9 品质 = 315 条 */
+/**
+ * 价格骨架表（price，V4 起）：手调锚点，cat × tier → 基准价。
+ * 工钱 / 赏金 / 自动补货都读 `材料|${tier}` 这一档（口径统一，与 A/B/C 类别无关）。
+ */
+export interface PriceRow {
+  cat: string; // 材料 / 稀有
+  tier: number;
+  base: number;
+  sellRatio: number; // 卖出折率（未来市集用，本版不参与计算）
+  note: string;
+}
+
+/**
+ * 稀缺系数表（subCatRatio，V4 起）：稀有料 subCat → 系数。
+ * 由生成器按「需求份额 ÷ 供给份额」算出后落表供 review；手改后重跑以表为准。
+ */
+export interface SubCatRatioRow {
+  subCat: string;
+  skillPool: string; // 产出它的 C 类技能
+  poolSize: number; // 该技能池大小（池内均匀随机 → 供给份额 = 1/poolSize）
+  demandCount: number; // 配方引用次数
+  supplyShare: number;
+  rawRatio: number; // 未 clamp 的裸比值
+  ratio: number; // clamp 后的最终系数
+  note: string;
+}
+
+/**
+ * 稀有掉率权重表（rareDropWeight，V4 起 / Plan C）：稀有 subCat → 掉率权重。
+ * 用途：C 类技能产出稀有时，按此权重在池内加权抽取（替代均匀 pickOne），使供给匹配需求。
+ * 由 E8 实测饥饿分布（starvedBySubCat）逆向推导的「配方需求占比」烘焙而来；手改后重跑以表为准。
+ * 缺表或某 subCat 缺行时，parse 回退到「配方 needRare 计数」推导（等价）。
+ */
+export interface RareDropWeightRow {
+  subCat: string;
+  skillPool: string; // 产出它的 C 类技能
+  weight: number; // 池内相对权重（同一池内归一化）
+  note: string;
+}
+
+/** 配方表（recipe）：30 制造族 × 3 阶 = 90 条 */
 export interface RecipeDef {
   tag: string;
   name: string;
@@ -93,9 +137,14 @@ export interface RecipeDef {
   quality: number;
   needItem1: string;
   needItem1Num: number;
-  matQualityFloor: number; // 投喂下界（红线④）
+  matQualityFloor: number; // 投喂下界（红线④，只约束基础层主料）
   needRare: string; // 稀有料 tag（可空）
-  needBlueprint: string; // 图纸 tag（可空）
+  /** 额外层辅料：其他 A 技能的 (q-1) 阶料（可空；q=1 时必然为空） */
+  needItem2: string;
+  needItem2Num: number;
+  /** 额外层稀有：其他 C 技能的 (q-1) 阶稀有（可空；q-1 < 4 时为空） */
+  needRare2: string;
+  needBlueprint: string; // 图纸 tag（可空；q1-3 天生会 → 空）
   resultItem: string;
   resultNum: number;
   /** 中文城市名 → city.tag；反查失败为 null */
@@ -164,6 +213,8 @@ export interface ConfigValues {
   initTaskListSlot: number; // 任务板槽位数
   startCityRand: string[]; // 出生城市候选
   initAttr: Record<AttrKey, Range>; // 初始四维区间
+  /** V4 初始金钱（文）；config 表缺列时回落 `INIT_MONEY` */
+  initMoney: number;
 }
 
 export interface ConfigMeta {
@@ -206,6 +257,14 @@ export interface GameConfig {
   blueprintByTag: Record<string, BlueprintDef>;
   /** C 类技能 tag → 该技能可产出的稀有料 subCat 列表（由 recipe+blueprint 推导） */
   rareSubCatBySkill: Record<string, string[]>;
+  /** V4 价格骨架表（无此表时为空数组 → 经济系统整体禁用） */
+  priceRows: PriceRow[];
+  /** `${cat}|${tier}` → 基准价；工钱/赏金读 `材料|${tier}` */
+  priceByKey: Record<string, number>;
+  /** V4 稀缺系数表（无此表时为空对象） */
+  subCatRatio: Record<string, SubCatRatioRow>;
+  /** Plan C：C 类技能 → (稀有 subCat → 掉率权重)；缺表时回退配方需求推导 */
+  rareSubCatWeightBySkill: Record<string, Record<string, number>>;
   /** 该级升到下一级所需经验；超出表长返回 null（已满级） */
   attrLvNeed: (lv: number) => number | null;
   values: ConfigValues;
@@ -219,6 +278,12 @@ export interface Task {
   cityTag: string;
   nodeTag: number;
   needTime: number;
+  /**
+   * B 类专属：本次任务实际要造的成品 tag。刷出任务时就锁定
+   * （从本段 4 个物品族里、玩家已解锁的那几个中随机选）。
+   * 为空表示走旧口径（读 TaskDef.mainOutput）。
+   */
+  outputTag?: string;
 }
 
 export type TaskSlot =
@@ -241,8 +306,32 @@ export interface GameStats {
   evalTally: number[];
   /** B 类因缺料未产出成品的次数（缺件自然停，不倒扣） */
   starvedTasks: number;
+  /** 缺料细分：因「材料不足」停产的次数（红线⑦ 自动补货只补这一类） */
+  starvedMat: number;
+  /** 缺料细分：因「稀有料不足」停产的次数（红线⑦ 禁买，只能靠 C 类产出 / Q21 重配解决） */
+  starvedRare: number;
+  /** E8：缺稀有按 subCat 细分（jingtie/xuantie/...），用于验证 Plan C 加权掉率是否对齐需求 */
+  starvedBySubCat: Record<string, number>;
+  /** 诊断用：C 类各 subCat 稀有产出计数（临时） */
+  raresProduced: Record<string, number>;
+  /** E8 Plan C v2：B 类各 subCat 稀有实际需求（已满足+未满足合计），用于按实际 B 需求重加权掉率 */
+  demandBySubCat: Record<string, number>;
   /** A/B/C 三类完成计数（按 cls 归并） */
   clsTally: Record<string, number>;
+  /** 已结算的随机事件条数（玩家点掉/超时自动结算都计入；离线模拟时由模拟器代点） */
+  eventsSettled: number;
+  /** 累计获得的属性经验（**所有来源**，唯一入口 addAttrXp 累加，用于校准「事件供给够不够」） */
+  attrXpTotal: number;
+  /** V4 累计获得金钱（文）：工钱 + 赏金 */
+  moneyEarned: number;
+  /** V4 累计工钱（文）：每任务结算给（E0a） */
+  moneyEarnedWage: number;
+  /** V4 累计赏金（文）：事件赏金选项给（E0b） */
+  moneyEarnedBounty: number;
+  /** V4 累计支出金钱（文）：自动补货买料 */
+  moneySpent: number;
+  /** V4 自动补货触发次数（不含「钱不够」的失败尝试） */
+  restockCount: number;
 }
 
 export interface LogEntry {
@@ -263,6 +352,10 @@ export interface GameState {
   cfgKey: string;
   /** 上次推进到的绝对时间戳（ms），离线结算的依据 */
   lastTickAt: number;
+  /** 模拟时钟（ms）：随 tick 的 dt 推进，用于随机事件计时（每日上限/冷却/TTL/过期）。
+   *  真实游玩时 dt=真实间隔，simNow 贴合真实时间（行为不变）；校准 sim 按模拟日正确推进。
+   *  改用 simNow 而非 Date.now()，否则快速校准 sim 里 Date.now() 不随模拟时间走，导致「每日上限」被瞬间耗尽、长周期事件全失真。 */
+  simNow: number;
   /** 出生城市（决定存档归属，不随移动改变） */
   startCity: string;
   rngState: number;
@@ -276,6 +369,12 @@ export interface GameState {
 
   bag: Record<string, number>;
   storage: Record<string, number>;
+
+  /**
+   * V4 金钱（文）。唯一用途是「缺料自动补货」；来源为任务工钱 + 事件赏金（红线⑤ 改字面）。
+   * 旧存档无此字段 → `ensureRuntimeFields` 兜底为 `INIT_MONEY`。
+   */
+  money: number;
 
   /** 四维属性值（即等级） */
   attrs: Record<AttrKey, number>;

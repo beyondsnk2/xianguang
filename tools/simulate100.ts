@@ -50,10 +50,7 @@ const DETAIL_COLUMNS = [
   '物品3',
   '物品3数量',
   '物品合计',
-  '武力经验',
-  '统帅经验',
-  '智力经验',
-  '政治经验',
+  // 属性经验列已移除（V4 R1 删临时桥后任务不发属性经验，恒 0 无信息）；四维看「角色汇总」的等级列
   '技能',
   '技能经验',
 ];
@@ -176,10 +173,6 @@ function detailRow(r: TaskRecord, maxRewardCols: number): Record<string, string 
     row[`物品${i + 1}数量`] = it.n;
   }
   row.物品合计 = r.rewards.reduce((a, b) => a + b.n, 0);
-  row.武力经验 = r.attrXp.force ?? 0;
-  row.统帅经验 = r.attrXp.leadership ?? 0;
-  row.智力经验 = r.attrXp.intelligent ?? 0;
-  row.政治经验 = r.attrXp.politics ?? 0;
   row.技能 = r.skill;
   row.技能经验 = r.skillXp;
   return row;

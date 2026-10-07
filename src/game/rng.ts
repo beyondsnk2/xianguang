@@ -20,6 +20,21 @@ export function pickOne<T>(state: GameState, arr: T[]): T | null {
   return arr[Math.floor(randFloat(state) * arr.length) % arr.length];
 }
 
+/** 按权重抽取：weight[i] ≤ 0 视为 0（不参与）。总权重为 0 时退化为均匀 pickOne。 */
+export function weightedPick<T>(state: GameState, arr: T[], weights: number[]): T | null {
+  if (!arr.length) return null;
+  let total = 0;
+  for (const w of weights) total += w > 0 ? w : 0;
+  if (total <= 0) return pickOne(state, arr);
+  let r = randFloat(state) * total;
+  for (let i = 0; i < arr.length; i++) {
+    const w = weights[i] > 0 ? weights[i] : 0;
+    r -= w;
+    if (r < 0) return arr[i];
+  }
+  return arr[arr.length - 1];
+}
+
 export function rollRange(state: GameState, r: { min: number; max: number } | null): number {
   if (!r) return 0;
   return randInt(state, r.min, r.max);

@@ -3,9 +3,9 @@ import { buildGraph, type Graph } from './game/graph';
 import { buildTaskIndex, type TaskIndex } from './game/taskGen';
 import { createInitialState, ensureRuntimeFields, normalizeSlots, pushLog, storageItemCount } from './game/state';
 import { syncPhase, tick, type TickCtx } from './game/tick';
-import { loadState, saveState, clearSave, TabLeader } from './game/save';
+import { loadState, saveState, clearSave, hasSave, TabLeader } from './game/save';
 import { runSelfCheck } from './game/selfcheck';
-import { OFFLINE_CAP_HOURS } from './game/constants';
+import { OFFLINE_CAP_HOURS, SAVE_VERSION } from './game/constants';
 import type { GameConfig, GameState } from './game/types';
 import { MapRenderer } from './render/map';
 import { autoSort, TaskBoard } from './ui/taskList';
@@ -62,6 +62,12 @@ async function boot(): Promise<void> {
     state = createInitialState(cfg, Date.now());
     pushLog(state, `配置切换到 ${cfgKey}，旧存档已丢弃`);
     toast(`配置已切换为 ${cfgKey}，旧存档已删除并重新开局`, 6000);
+  } else if (!oldSave && hasSave()) {
+    // 存档结构版本不符（loadState 已弃档）→ 明确告知，避免玩家以为是 bug
+    clearSave();
+    state = createInitialState(cfg, Date.now());
+    pushLog(state, `存档结构版本不符（当前 v${SAVE_VERSION}），已重新开局`);
+    toast(`存档版本已升级到 v${SAVE_VERSION}，旧存档无法兼容，已重新开局`, 6000);
   }
   // 配置槽位数变化时的最小迁移
   if (state.slots.length !== cfg.values.initTaskListSlot) {

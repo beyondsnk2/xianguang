@@ -9,29 +9,38 @@ import {
   BLUEPRINT_MIN_FAVOR,
   BLUEPRINT_MIN_QUALITY,
   EFF_SAVE_AT_BEST,
+  EXTRA_BONUS_RATIO,
   FAVOR_PER_TASK,
   MINGQI_BY_C_SKILL,
   MINGQI_CHANCE,
   MINGQI_MIN_EVAL_TIER,
   MINGQI_MIN_QUALITY,
   RARE_MIN_QUALITY,
+  rareCountByQuality,
 } from './constants';
 import type { EvalResult } from './eval';
 import { addItem, consumeItem, ownedCount } from './inventory';
-import { pickOne, randFloat, rollRange } from './rng';
+import { pickOne, randFloat, rollRange, weightedPick } from './rng';
 import { emitEvent } from './events';
 import type { RewardItem } from './taskLog';
-import type { GameConfig, GameState, TaskDef } from './types';
+import type { GameConfig, GameState, Task, TaskDef } from './types';
 
 /**
  * @returns 本次实际产出的物品列表（不记录消耗），供统计/录制用；调用顺序不受返回值影响。
+ * `task` 用于 B 类取「刷出任务时锁定的制造目标」（V5）；不传则回退 TaskDef.mainOutput。
  */
-export function settleOutput(state: GameState, cfg: GameConfig, def: TaskDef, ev: EvalResult): RewardItem[] {
+export function settleOutput(
+  state: GameState,
+  cfg: GameConfig,
+  def: TaskDef,
+  ev: EvalResult,
+  task?: Task,
+): RewardItem[] {
   switch (def.cls) {
     case 'A':
       return settleGather(state, def, ev);
     case 'B':
-      return settleCraft(state, cfg, def, ev);
+      return settleCraft(state, cfg, def, ev, task);
     case 'C':
       return settleSocial(state, cfg, def, ev);
     default:
@@ -50,12 +59,23 @@ function settleGather(state: GameState, def: TaskDef, ev: EvalResult): RewardIte
 }
 
 /**
- * B 效率：n 品制造只吃 q≥n 的 A 料（红线④，生产侧按 recipe.matQualityFloor 把关）。
+ * B 效率：n 品制造只吃 q≥n 的 A 主料（红线④，生产侧按 recipe.matQualityFloor 把关）。
  * 评价越高越省料（绝 −25%）；缺图纸/缺料只停产出，不扣玩家任何东西。
  * 库存不足时按「能做几件做几件」交付，避免高品批量需求把线锁死。
+ *
+ * V5 两层需求——**只有基础层是开工门槛，额外层是加成**：
+ *   基础层（配对 A 的同阶料 + 配对 C 的同阶稀有）齐备 → 开造；
+ *   额外层（其他行当的 q-1 阶料 + q-1 阶稀有）齐备 → **额外产出**，缺了也照造、不消耗。
  */
-function settleCraft(state: GameState, cfg: GameConfig, def: TaskDef, ev: EvalResult): RewardItem[] {
-  const product = def.mainOutput || def.getItem;
+function settleCraft(
+  state: GameState,
+  cfg: GameConfig,
+  def: TaskDef,
+  ev: EvalResult,
+  task?: Task,
+): RewardItem[] {
+  const preferred = task?.outputTag && cfg.recipeByResult[task.outputTag] ? task.outputTag : '';
+  const product = preferred || def.mainOutput || def.getItem;
   const recipe = product ? cfg.recipeByResult[product] : undefined;
   if (!recipe) return [];
 
@@ -65,22 +85,69 @@ function settleCraft(state: GameState, cfg: GameConfig, def: TaskDef, ev: EvalRe
   }
 
   const save = EFF_SAVE_AT_BEST * Math.min(1, Math.max(0, ev.mult - 1)); // evalInc 上限 1 → 省料上限 25%
-  const matPer = Math.max(1, Math.ceil(recipe.needItem1Num * (1 - save)));
+  const per = (tag: string, num: number) => (tag ? Math.max(1, Math.ceil(num * (1 - save))) : 0);
+  const matPer = per(recipe.needItem1, recipe.needItem1Num);
+  const mat2Per = per(recipe.needItem2, recipe.needItem2Num);
   const rarePer = recipe.needRare ? 1 : 0;
+  const rare2Per = recipe.needRare2 ? 1 : 0;
 
-  const matOwn = ownedCount(state, recipe.needItem1);
-  const rareOwn = recipe.needRare ? ownedCount(state, recipe.needRare) : Infinity;
+  const own = (tag: string) => (tag ? ownedCount(state, tag) : Infinity);
+  const matOwn = own(recipe.needItem1);
+  const mat2Own = own(recipe.needItem2);
+  const rareOwn = own(recipe.needRare);
+  const rare2Own = own(recipe.needRare2);
+  const sub = recipe.needRare ? recipe.needRare.replace(/_\d+$/, '') : '';
+  const sub2 = recipe.needRare2 ? recipe.needRare2.replace(/_\d+$/, '') : '';
 
-  let cycles = Math.max(1, rollRange(state, def.getItemNum));
-  cycles = Math.min(cycles, Math.floor(matOwn / matPer), rarePer ? Math.floor(rareOwn / rarePer) : Infinity);
-  if (cycles < 1) {
+  // 缺料细分：先判是哪一类料卡住（决定缺料率的真实成因，也决定 E3 自动补货能补掉多少）
+  const starve = (kind: 'mat' | 'rare', subCat: string) => {
     state.stats.starvedTasks += 1;
+    if (kind === 'mat') state.stats.starvedMat += 1;
+    else {
+      state.stats.starvedRare += 1;
+      if (subCat) state.stats.starvedBySubCat[subCat] = (state.stats.starvedBySubCat[subCat] ?? 0) + 1;
+    }
+  };
+  if (matOwn < matPer) {
+    starve('mat', '');
     return [];
   }
 
+  const rolled = Math.max(1, rollRange(state, def.getItemNum));
+  // Plan C v2：B 类稀有实际需求（attempted，与供给无关）= 每次掷骰量；用于按实际 B 需求重加权 C 掉率。
+  // 额外层也计入——它虽不拦开工，但仍是真实的稀有消耗源。
+  if (sub) state.stats.demandBySubCat[sub] = (state.stats.demandBySubCat[sub] ?? 0) + rolled;
+  if (sub2) state.stats.demandBySubCat[sub2] = (state.stats.demandBySubCat[sub2] ?? 0) + rolled;
+  if (rareOwn < rarePer) {
+    starve('rare', sub);
+    return [];
+  }
+
+  // 基础层决定能造几件
+  const cycles = Math.min(rolled, Math.floor(matOwn / matPer), rarePer ? Math.floor(rareOwn / rarePer) : Infinity);
+  if (cycles < 1) {
+    starve('mat', '');
+    return [];
+  }
   consumeItem(state, recipe.needItem1, matPer * cycles);
   if (recipe.needRare) consumeItem(state, recipe.needRare, rarePer * cycles);
-  const n = Math.max(1, recipe.resultNum) * cycles;
+
+  // 额外层：加成而非门槛。缺了不消耗、不停产；齐备时最多多产 cycles × EXTRA_BONUS_RATIO 件
+  let bonus = 0;
+  if (mat2Per > 0 || rare2Per > 0) {
+    const cap = Math.max(1, Math.floor(cycles * EXTRA_BONUS_RATIO));
+    bonus = Math.min(
+      cap,
+      mat2Per ? Math.floor(mat2Own / mat2Per) : Infinity,
+      rare2Per ? Math.floor(rare2Own / rare2Per) : Infinity,
+    );
+    if (bonus > 0) {
+      if (recipe.needItem2) consumeItem(state, recipe.needItem2, mat2Per * bonus);
+      if (recipe.needRare2) consumeItem(state, recipe.needRare2, rare2Per * bonus);
+    }
+  }
+
+  const n = Math.max(1, recipe.resultNum) * (cycles + bonus);
   addItem(state, recipe.resultItem, n);
   return [{ tag: recipe.resultItem, n }];
 }
@@ -93,12 +160,19 @@ function settleSocial(state: GameState, cfg: GameConfig, def: TaskDef, ev: EvalR
   state.favor += favor;
 
   if (q >= RARE_MIN_QUALITY) {
-    const subs = cfg.rareSubCatBySkill[def.skill] ?? [];
-    const sub = subs.length ? pickOne(state, subs) : null;
+    // 只在本品质下真实存在的稀有里抽：抽到不存在的 `${sub}_${q}` 会让这次产出直接作废
+    const all = cfg.rareSubCatBySkill[def.skill] ?? [];
+    const subs = all.filter((s) => cfg.itemByTag[`${s}_${q}`]);
+    const wmap = cfg.rareSubCatWeightBySkill[def.skill];
+    const weights = subs.map((s) => (wmap ? wmap[s] ?? 0 : 0));
+    const sub = subs.length ? weightedPick(state, subs, weights) : null;
     const tag = sub ? `${sub}_${q}` : '';
-    if (tag && cfg.itemByTag[tag]) {
-      addItem(state, tag, 1);
-      out.push({ tag, n: 1 });
+    if (tag && sub && cfg.itemByTag[tag]) {
+      // V5：产出件数按品质递增（1~3），额外层让 B 需求翻倍，恒 1 撑不住
+      const cnt = rareCountByQuality(q);
+      addItem(state, tag, cnt);
+      state.stats.raresProduced[sub] = (state.stats.raresProduced[sub] ?? 0) + cnt;
+      out.push({ tag, n: cnt });
     }
   }
 
@@ -111,9 +185,13 @@ function settleSocial(state: GameState, cfg: GameConfig, def: TaskDef, ev: EvalR
     }
   }
 
+  // V5 边界①：q4 起制造就要图纸，故图纸掉落门槛同步下移到 q≥4（原 q≥7 会让中段长期空转）。
+  // 每 C 技能持有 8 张图 → 从未拥有的里面随机发一张，而不是固定发第一张。
   if (q >= BLUEPRINT_MIN_QUALITY && ev.tier >= BLUEPRINT_MIN_EVAL_TIER && state.favor >= BLUEPRINT_MIN_FAVOR) {
-    const bp = cfg.blueprints.find((b) => b.fromSkill === def.skill);
-    if (bp && !state.blueprints.includes(bp.tag)) {
+    const owned = new Set(state.blueprints);
+    const pool = cfg.blueprints.filter((b) => b.fromSkill === def.skill && !owned.has(b.tag));
+    const bp = pool.length ? pickOne(state, pool) : null;
+    if (bp) {
       state.blueprints.push(bp.tag);
       emitEvent(state, `习得图纸「${bp.name}」`, 1, 'blueprint');
     }

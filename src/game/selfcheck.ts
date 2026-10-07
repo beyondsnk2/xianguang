@@ -4,6 +4,8 @@ import { nodeDistance } from './graph';
 import { buildTaskIndex, type TaskIndex } from './taskGen';
 import { bagSlotsUsed, createInitialState } from './state';
 import { tick, type TickCtx } from './tick';
+import { eventByTag, resolveEvent } from './event';
+import { randInt } from './rng';
 import { OFFLINE_CAP_HOURS } from './constants';
 
 export interface CheckItem {
@@ -160,6 +162,16 @@ export interface SimResult {
   blueprints: string[];
   /** B 类缺料未完成次数 */
   starvedTasks: number;
+  /** 缺料细分：材料不足 */
+  starvedMat: number;
+  /** 缺料细分：稀有料不足 */
+  starvedRare: number;
+  /** E8：缺稀有按 subCat 细分 */
+  starvedBySubCat: Record<string, number>;
+  /** 诊断用：C 类各 subCat 稀有产出计数（临时） */
+  raresProduced: Record<string, number>;
+  /** E8 Plan C v2：B 类各 subCat 稀有实际需求（已满足+未满足合计） */
+  demandBySubCat: Record<string, number>;
   /** 仓内存货总件数 */
   storageCount: number;
   samples: number;
@@ -167,12 +179,41 @@ export interface SimResult {
   idleSamples: number;
   /** 超容却没在回城的采样数（应为 0） */
   overloadViolations: number;
+  /** 已结算的随机事件条数（模拟器代玩家点掉，代表「玩家及时点」的供给上界） */
+  eventsSettled: number;
+  /** 累计获得的属性经验（四维合计，来自随机事件） */
+  attrXpTotal: number;
+  /** V4 金钱快照（文） */
+  money: number;
+  /** V4 累计获得 / 支出金钱（文） */
+  moneyEarned: number;
+  moneyEarnedWage: number;
+  moneyEarnedBounty: number;
+  moneySpent: number;
+  /** V4 自动补货触发次数 */
+  restockCount: number;
+  /** 模拟结束时仍堆在容器里未处理的事件数（应接近 0；高说明玩家点不过来） */
+  pendingLeft: number;
 }
 
-/** 24 小时模拟（开发文档 §7.2 节奏验收） */
-export function simulate(cfg: GameConfig, graph: Graph, hours = 24, seed = 20261001): SimResult {
+/**
+ * 24 小时模拟（开发文档 §7.2 节奏验收）。
+ *
+ * ⚠ V4 R1 起默认 `autoEvents: true`：**随机事件会生成并被模拟器代玩家点掉**。
+ * 原因：删掉临时属性桥后，四维只由随机事件供给，若模拟器不跑事件回路，
+ * 校准出来的「属性 / 评价分布」是**测量失真**（事件一条没结算），不能作为调参依据。
+ * 要复现旧口径（纯任务、不跑事件）传 `{ autoEvents: false }`。
+ */
+export function simulate(
+  cfg: GameConfig,
+  graph: Graph,
+  hours = 24,
+  seed = 20261001,
+  opts?: { autoEvents?: boolean },
+): SimResult {
+  const autoEvents = opts?.autoEvents ?? true;
   const taskIndex: TaskIndex = buildTaskIndex(cfg);
-  const ctx: TickCtx = { cfg, graph, taskIndex };
+  const ctx: TickCtx = { cfg, graph, taskIndex, online: autoEvents };
   const now = Date.now();
   const state = createInitialState(cfg, now, seed);
   tick(state, 1e-9, ctx); // 触发 syncPhase：接取队首
@@ -185,6 +226,8 @@ export function simulate(cfg: GameConfig, graph: Graph, hours = 24, seed = 20261
   let overloadViolations = 0;
   for (let i = 0; i < steps; i++) {
     tick(state, chunk, ctx);
+    // 采样放在事件结算**之前**：事件会发物品，若先结算再采样，会把「事件塞满背包但还没到下次任务结算」
+    // 记成「超容未回城」，那是采样时序造成的假告警（真实玩家下一次任务完成时同样会自动回城）。
     const empty = state.slots.filter((s) => s.kind === 'empty').length;
     emptySum += empty;
     samples++;
@@ -192,6 +235,7 @@ export function simulate(cfg: GameConfig, graph: Graph, hours = 24, seed = 20261
     if (bagSlotsUsed(state, cfg) > cfg.values.backPackSlotNum && state.phase.kind !== 'returning') {
       overloadViolations++;
     }
+    if (autoEvents) autoResolveEvents(state, cfg);
   }
   const totalSec = hours * 3600;
   const skills: Record<string, { lv: number; xp: number }> = {};
@@ -212,11 +256,40 @@ export function simulate(cfg: GameConfig, graph: Graph, hours = 24, seed = 20261
     favor: state.favor,
     blueprints: [...state.blueprints],
     starvedTasks: state.stats.starvedTasks,
+    starvedMat: state.stats.starvedMat ?? 0,
+    starvedRare: state.stats.starvedRare ?? 0,
+    starvedBySubCat: { ...state.stats.starvedBySubCat },
+    raresProduced: { ...state.stats.raresProduced },
+    demandBySubCat: { ...state.stats.demandBySubCat },
     storageCount: Object.values(state.storage).reduce((a, b) => a + b, 0),
     samples,
     idleSamples,
     overloadViolations,
+    eventsSettled: state.stats.eventsSettled ?? 0,
+    attrXpTotal: state.stats.attrXpTotal ?? 0,
+    money: state.money ?? 0,
+    moneyEarned: state.stats.moneyEarned ?? 0,
+    moneyEarnedWage: state.stats.moneyEarnedWage ?? 0,
+    moneyEarnedBounty: state.stats.moneyEarnedBounty ?? 0,
+    moneySpent: state.stats.moneySpent ?? 0,
+    restockCount: state.stats.restockCount ?? 0,
+    pendingLeft: state.pending.length,
   };
+}
+
+/**
+ * 模拟器代玩家把容器里的事件逐条点掉（多选项随机取一个，与真人决策同分布）。
+ * 这是「玩家每次都及时点击」的上界；真实玩家会漏掉一部分（TTL 4h 后过期，不给奖励）。
+ */
+function autoResolveEvents(state: GameState, cfg: GameConfig): void {
+  let guard = 0;
+  while (state.pending.length && guard++ < 50) {
+    const p = state.pending[0];
+    const def = eventByTag[p.tag];
+    const n = def?.options?.length ?? 0;
+    const optIdx = n > 0 ? randInt(state, 0, n - 1) : undefined;
+    if (!resolveEvent(state, cfg, p.id, optIdx)) break;
+  }
 }
 
 export interface OfflineResult {

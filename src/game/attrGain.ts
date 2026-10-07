@@ -1,24 +1,22 @@
 /**
- * T7：属性来源的正式收敛。
+ * 属性经验入口（V4 R1 后：随机事件是唯一来源）。
  *
- * 设计裁定（F19b / V2-5）：**四维属性只由随机事件积累，任务不再发属性经验**
+ * 设计裁定（F19b / V2-5）：**四维属性只由随机事件积累，任务不发属性经验**
  * （config 的 `getAttrXp` 保持 null），且 **`addAttrXp` 是属性增长的唯一入口**。
  *
- * V2 不实装随机事件（F31 后置），因此在随机事件接管之前，本文件提供**唯一的过渡供给源**：
- * 任务结算按 cls → 主属性定量供给（A←武力 / B←智力 / C←政治），统帅按概率小量供给
- * （统帅是全局节拍器、不进评价体系，故独立掷骰）。
- *
- * 接入随机事件时的替换方式：删掉 `settleTask` 里对 `gainTaskAttrXp` 的调用即可；
- * 随机事件侧仍然调用同一个 `addAttrXp` 入口，本文件的过渡段随之下线。
+ * V2 曾因未实装随机事件而在 `tick.ts::settleTask` 挂了一段「临时桥」（每任务 +2 主属性 / 30% +1 统帅）。
+ * 随机事件（60 条 / 双源触发）实装后该桥已删除 —— 否则属性是**双份供给**，四维会虚高。
+ * 桥留下的常量里只有 `ATTR_LEAD_CHANCE` 被 `generals.ts::propagateDeed` 复用（判断事迹是否展示统帅），
+ * 已改名 `DEED_LEAD_CHANCE` 保留在 constants.ts，不要当桥的残留删掉。
  */
-import { ATTR_LEAD_CHANCE, ATTR_LEAD_XP, ATTR_XP_PER_TASK, CLS_TO_ATTR } from './constants';
-import { randFloat } from './rng';
 import { emitEvent } from './events';
-import { ATTR_NAMES, type AttrKey, type GameConfig, type GameState, type TaskDef } from './types';
+import { ATTR_NAMES, type AttrKey, type GameConfig, type GameState } from './types';
 
-/** ★ 属性经验的唯一入口：所有来源（随机事件 / 过渡供给）都必须走这里 */
+/** ★ 属性经验的唯一入口：所有来源（随机事件 / 旧配置 getAttrXp 兜底）都必须走这里 */
 export function addAttrXp(state: GameState, cfg: GameConfig, key: AttrKey, amount: number): void {
   state.attrXp[key] += amount;
+  // 校准用累计（所有来源都经此入口；删临时桥后它就是「事件供给够不够」的度量）
+  if (typeof state.stats.attrXpTotal === 'number') state.stats.attrXpTotal += amount;
   let guard = 0;
   while (guard++ < 1000) {
     const lv = state.attrs[key];
@@ -30,24 +28,4 @@ export function addAttrXp(state: GameState, cfg: GameConfig, key: AttrKey, amoun
       emitEvent(state, `${ATTR_NAMES[key]} 提升至 Lv ${lv + 1}`, 1, 'attr');
     } else break;
   }
-}
-
-/**
- * 过渡供给：任务完成时按类别喂主属性 + 概率喂统帅。
- * ⚠ 这是「临时桥」的归位版本——接 F19b 随机事件后整段删除，
- * 届时属性只由随机事件经 `addAttrXp` 灌入。
- * @returns 本次实际发放的属性经验（key→数量），供录制/统计使用
- */
-export function gainTaskAttrXp(state: GameState, cfg: GameConfig, def: TaskDef): Partial<Record<AttrKey, number>> {
-  const gained: Partial<Record<AttrKey, number>> = {};
-  const main = CLS_TO_ATTR[def.cls];
-  if (main) {
-    addAttrXp(state, cfg, main, ATTR_XP_PER_TASK);
-    gained[main] = (gained[main] ?? 0) + ATTR_XP_PER_TASK;
-  }
-  if (randFloat(state) < ATTR_LEAD_CHANCE) {
-    addAttrXp(state, cfg, 'leadership', ATTR_LEAD_XP);
-    gained.leadership = (gained.leadership ?? 0) + ATTR_LEAD_XP;
-  }
-  return gained;
 }

@@ -11,8 +11,19 @@ export const OFFLINE_CAP_HOURS = 8;
 /** 单次 tick 允许结算的最大事件数（防御死循环） */
 export const MAX_TICK_EVENTS = 200_000;
 
-/** 存档结构版本（V2 引入技能/好感/图纸字段，升到 2；版本不符直接弃档重开） */
-export const SAVE_VERSION = 2;
+/** 存档结构版本（V2 引入技能/好感/图纸字段升到 2；V4 引入金钱字段升到 3；版本不符直接弃档重开） */
+export const SAVE_VERSION = 3;
+
+/** V4 初始金钱（文）。config 表有 initMoney 时以表为准 */
+export const INIT_MONEY = 500;
+
+/** E0 任务工钱系数：wage = round(price[材料|tier] × WAGE_RATIO)。Q-V4-11 已定 1.0（锚定基准价）。⚠ R5 之后回调 */
+export const WAGE_RATIO = 1.0;
+
+/** E0 事件赏金系数：bounty = round(price[材料|tier] × BOUNTY_MULT)。
+ *  Q-V4-9 设计目标 工钱:赏金 ≈ 7:3；校准 sim（随机选选项的玩家上界）实测 120d 工钱:赏金 78:22（BOUNTY_MULT=10），
+ *  把系数提到 15 → 赏金占比升到 ~30%，贴合 7:3。（本版临时调平，后续重做紧张经济时整体回调） */
+export const BOUNTY_MULT = 15;
 
 /** 存档 key */
 export const SAVE_KEY = 'sanwalk.save.v1';
@@ -89,8 +100,29 @@ export const REL_FIRST_MEET = 8;
 export const REL_FIRST_MEET_CHANCE = 0.35;
 /** 稀有材料：品质 ≥ 4 的 C 任务才可能产出（item 表稀有只有 4-9 品） */
 export const RARE_MIN_QUALITY = 4;
-/** 图纸：品质 ≥ 7 + 评价 ≥ 佳 + 好感达标才解锁 */
-export const BLUEPRINT_MIN_QUALITY = 7;
+/**
+ * V5：单次 C 任务产出的稀有件数（按品质递增 1→3）。
+ * 旧值恒为 1。V5 给 B 制造加了「额外层」——每笔制造要两个稀有（基础 + 额外），
+ * 且两个稀有独立稀缺、缺料率按乘法叠加（0.44² ≈ 0.19 才对上实测 75% 停产）。
+ * 故 C 侧必须同步抬量，否则高阶制造线整体瘫痪。
+ */
+export function rareCountByQuality(q: number): number {
+  if (q <= 5) return 1;
+  if (q <= 7) return 2;
+  return 3;
+}
+/**
+ * 图纸：品质 ≥ 4 + 评价 ≥ 佳 + 好感达标才解锁。
+ * V5：品质门槛由 7 下移到 4 —— 制造侧 q1-3 天生会、q4 起全部需要图纸，
+ * 若掉落仍从 q7 开始，中段玩家会长期无图可造（实现边界①）。
+ */
+/**
+ * V5：额外层是「加成」不是「门槛」。
+ * 基础料 + 基础稀有齐备即可开工；额外料齐备时**额外产出**，最多多产 `cycles × 本比例` 件。
+ * （旧实现是四项齐备才开造，缺料率被两个稀有按乘法叠加推到 51%，故改为加成。）
+ */
+export const EXTRA_BONUS_RATIO = 1.0;
+export const BLUEPRINT_MIN_QUALITY = 4;
 export const BLUEPRINT_MIN_EVAL_TIER = 2;
 export const BLUEPRINT_MIN_FAVOR = 30;
 /** 名品：上品 C 任务的小概率产出（对应 3 件名品） */
@@ -127,16 +159,14 @@ export const MINGQI_BY_C_SKILL: Record<string, string> = {
   envoy: 'mingqi_exotic',
 };
 
-// ─────────────────────────── T7 属性来源（过渡） ───────────────────────────
+// ─────────────────────────── 事迹展示（F28） ───────────────────────────
 
 /**
- * 设计口径：四维属性只在**随机事件**里积累，任务不发属性经验（`getAttrXp` 列保持 null）。
- * V2 不实装随机事件（F31 后置），`attrGain.ts::gainTaskAttrXp` 是接管前的**唯一过渡源**；
- * 数值沿用原临时桥（每日 ≈111 点主属性 / ≈50 点统帅），接 F19b 后连同这里的常量一起删除。
+ * 事迹传播时「额外展示统帅」的概率。
+ * ⚠ 这是**武将关系**用的常量（`generals.ts::propagateDeed`），不是属性桥。
+ * 原 `ATTR_LEAD_CHANCE` 是临时桥给玩家涨统帅的概率，桥已删（V4 R1），此常量改名保留。
  */
-export const ATTR_XP_PER_TASK = 2;
-export const ATTR_LEAD_CHANCE = 0.3;
-export const ATTR_LEAD_XP = 1;
+export const DEED_LEAD_CHANCE = 0.3;
 
 // ── B 类效率收益（同评价下省料） ──
 
