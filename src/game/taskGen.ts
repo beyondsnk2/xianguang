@@ -1,7 +1,9 @@
 import type { CityDef, GameConfig, MapNodeDef, Task, TaskDef } from './types';
-import { pickOne, randFloat } from './rng';
+import { pickOne, randFloat, weightedPick } from './rng';
+import { C_FAVOR_CHANCE, C_MIN_QUALITY, RARE_MIN_QUALITY } from './constants';
 import type { AmbitionKey, GameState, PaceKey } from './types';
 import { qualityWeights, qualityWindow, skillTier } from './skill';
+import { pickFirstMeetHero } from './generals';
 
 /**
  * 抱负 → 偏好技能集合（设计 §8.6）。
@@ -129,6 +131,15 @@ export function genTask(state: GameState, cfg: GameConfig, idx: TaskIndex): Task
   // B 类：刷出任务时就锁定实际制造目标（已解锁族中随机）
   const fams = taskDef.cls === 'B' ? unlockedFams(state, cfg, taskDef) : null;
   const outputTag = fams && fams.length ? `${pickOne(state, fams)}_${taskDef.quality}` : undefined;
+  // C 类：V6 改为生成时掷 10% 骰，命中才锁「本次好感对象」——好感/结识变稀有回报。
+  // 不中则 heroTag 为空，本次 C 任务不产出武将好感（仅材料，见 produce.ts）。
+  const heroTag =
+    taskDef.cls === 'C' && randFloat(state) < C_FAVOR_CHANCE ? pickFirstMeetHero(state) : undefined;
+  // C 类：生成时锁定「本次稀有料」——与结算同款候选池+权重，所见即所得。仅 q>=RARE_MIN_QUALITY 才有。
+  const rareTag =
+    taskDef.cls === 'C' && taskDef.quality >= RARE_MIN_QUALITY
+      ? pickRareTag(state, cfg, taskDef)
+      : undefined;
   return {
     id: state.nextTaskId++,
     taskTag: taskDef.tag,
@@ -136,7 +147,24 @@ export function genTask(state: GameState, cfg: GameConfig, idx: TaskIndex): Task
     nodeTag: node.tag,
     needTime: taskDef.needTime,
     outputTag,
+    heroTag,
+    rareTag,
   };
+}
+
+/**
+ * C 类「本次稀有料」候选：取本技能在本品质下真实存在的稀有子类别，
+ * 按 rareSubCatWeightBySkill 加权抽一个，拼成 `${sub}_${q}` 物品 tag。
+ * 与 produce.ts settleSocial 的稀有抽取逻辑完全一致（保证生成锁定=结算实际）。
+ */
+function pickRareTag(state: GameState, cfg: GameConfig, def: TaskDef): string | undefined {
+  const all = cfg.rareSubCatBySkill[def.skill] ?? [];
+  const subs = all.filter((s) => cfg.itemByTag[`${s}_${def.quality}`]);
+  if (!subs.length) return undefined;
+  const wmap = cfg.rareSubCatWeightBySkill[def.skill];
+  const weights = subs.map((s) => (wmap ? wmap[s] ?? 0 : 0));
+  const sub = weightedPick(state, subs, weights);
+  return sub ? `${sub}_${def.quality}` : undefined;
 }
 
 function pickTaskDef(state: GameState, cfg: GameConfig, idx: TaskIndex): TaskDef | null {
@@ -177,6 +205,14 @@ function pickTaskDef(state: GameState, cfg: GameConfig, idx: TaskIndex): TaskDef
       }
     }
   }
+
+  // C 类最小品质门槛（V7）：q1-3 的 C 不进随机池——低品质 C 奖励空间空，属前期信息噪点。
+  // 过滤后为空（如技能尚在低 tier、窗口仍 1-3）则该技能本期无 C 候选，不回退到 q<4。
+  if (candidates.length && candidates[0].cls === 'C') {
+    const ok = candidates.filter((t) => t.quality >= C_MIN_QUALITY);
+    candidates = ok;
+  }
+
   if (candidates.length === 1) return candidates[0];
 
   const weights = qualityWeights(tier);

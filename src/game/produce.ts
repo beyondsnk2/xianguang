@@ -16,7 +16,7 @@ import {
   MINGQI_MIN_EVAL_TIER,
   MINGQI_MIN_QUALITY,
   RARE_MIN_QUALITY,
-  rareCountByQuality,
+  rareCountByEval,
 } from './constants';
 import type { EvalResult } from './eval';
 import { addItem, consumeItem, ownedCount } from './inventory';
@@ -42,7 +42,7 @@ export function settleOutput(
     case 'B':
       return settleCraft(state, cfg, def, ev, task);
     case 'C':
-      return settleSocial(state, cfg, def, ev);
+      return settleSocial(state, cfg, def, ev, task);
     default:
       return settleGather(state, def, ev); // 未标类的老配置：按最朴素的「发道具」处理
   }
@@ -153,24 +153,36 @@ function settleCraft(
 }
 
 /** C 关系：好感 + 稀有料（红线① 只有 C 能给）+ 图纸 + 小概率名品 */
-function settleSocial(state: GameState, cfg: GameConfig, def: TaskDef, ev: EvalResult): RewardItem[] {
+function settleSocial(
+  state: GameState,
+  cfg: GameConfig,
+  def: TaskDef,
+  ev: EvalResult,
+  task?: Task,
+): RewardItem[] {
   const out: RewardItem[] = [];
   const q = def.quality;
   const favor = FAVOR_PER_TASK + Math.max(0, q) + ev.tier;
   state.favor += favor;
 
   if (q >= RARE_MIN_QUALITY) {
-    // 只在本品质下真实存在的稀有里抽：抽到不存在的 `${sub}_${q}` 会让这次产出直接作废
-    const all = cfg.rareSubCatBySkill[def.skill] ?? [];
-    const subs = all.filter((s) => cfg.itemByTag[`${s}_${q}`]);
-    const wmap = cfg.rareSubCatWeightBySkill[def.skill];
-    const weights = subs.map((s) => (wmap ? wmap[s] ?? 0 : 0));
-    const sub = subs.length ? weightedPick(state, subs, weights) : null;
-    const tag = sub ? `${sub}_${q}` : '';
-    if (tag && sub && cfg.itemByTag[tag]) {
-      // V5：产出件数按品质递增（1~3），额外层让 B 需求翻倍，恒 1 撑不住
-      const cnt = rareCountByQuality(q);
+    // 优先用生成时锁定的具体稀有料（所见即所得）；旧档/无锁定则结算时按同款池加权随机。
+    let tag: string;
+    if (task?.rareTag && cfg.itemByTag[task.rareTag]) {
+      tag = task.rareTag;
+    } else {
+      const all = cfg.rareSubCatBySkill[def.skill] ?? [];
+      const subs = all.filter((s) => cfg.itemByTag[`${s}_${q}`]);
+      const wmap = cfg.rareSubCatWeightBySkill[def.skill];
+      const weights = subs.map((s) => (wmap ? wmap[s] ?? 0 : 0));
+      const sub = subs.length ? weightedPick(state, subs, weights) : null;
+      tag = sub ? `${sub}_${q}` : '';
+    }
+    if (tag && cfg.itemByTag[tag]) {
+      // 产出件数按评价 4 档递增（拙1/平2/佳3/绝4），与评价挂钩、不随品质
+      const cnt = rareCountByEval(ev.tier);
       addItem(state, tag, cnt);
+      const sub = tag.split('_')[0];
       state.stats.raresProduced[sub] = (state.stats.raresProduced[sub] ?? 0) + cnt;
       out.push({ tag, n: cnt });
     }

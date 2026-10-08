@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>任务板 ABC 两类方案对照</title>
+<style>
+  :root {
+    --bg:#12141a; --bg-soft:#191c24; --card:#1e222c; --card-2:#232833; --line:#2e3440;
+    --text:#e6e8ee; --dim:#9aa3b2; --gold:#d9a441;
+    --green:#5fb37a; --blue:#5b9fd6; --r1:#8f8ae0; --red:#d1614f;
+    --radius:10px;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif; font-size:14px; }
+  .wrap { max-width:760px; margin:0 auto; padding:22px 18px 60px; }
+  h1 { font-size:20px; color:var(--gold); letter-spacing:2px; margin:0 0 4px; }
+  .lead { color:var(--dim); font-size:12px; line-height:1.7; margin:0 0 20px; }
+  .scheme { background:var(--bg-soft); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin-bottom:24px; }
+  .scheme h2 { margin:0 0 4px; font-size:16px; display:flex; align-items:center; gap:8px; }
+  .scheme h2 .tag { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); color:var(--dim); }
+  .scheme .desc { color:var(--dim); font-size:12px; line-height:1.7; margin:0 0 14px; }
+  .note { font-size:11px; color:#6b7280; line-height:1.6; margin-top:12px; border-top:1px dashed var(--line); padding-top:10px; }
+
+  /* 类别色 */
+  .A { --c:var(--green); } .B { --c:var(--blue); } .C { --c:var(--r1); }
+
+  /* ── 方案1：统一骨架 + 类别色编码 ── */
+  .b1 { display:flex; flex-direction:column; gap:6px; }
+  .t1 { background:var(--card-2); border:1px solid var(--line); border-left:3px solid var(--c);
+        border-radius:8px; padding:8px 10px; display:grid; grid-template-columns:1fr auto; gap:6px 8px; align-items:center; }
+  .t1.locked { border-color:var(--gold); border-left-color:var(--gold); background:#2a2416; }
+  .t1 .ttl { font-size:13px; font-weight:600; }
+  .t1 .ttl .cls { display:inline-block; margin-right:5px; padding:0 5px; border-radius:3px; font-size:10px; font-weight:700;
+        color:#11141a; background:var(--c); vertical-align:1px; }
+  .t1 .ttl .city { color:var(--gold); }
+  .t1 .key { grid-column:1/-1; font-size:11px; color:var(--dim); }
+  .t1 .key b { color:var(--text); }
+  .t1 .right { text-align:right; font-size:11px; color:var(--dim); }
+  .t1 .bar { grid-column:1/-1; height:4px; background:#2a2f3b; border-radius:2px; overflow:hidden; }
+  .t1 .bar > i { display:block; height:100%; background:var(--c); }
+
+  /* ── 方案2：类别专属字段区（统一标签芯片语法） ── */
+  .b2 { display:flex; flex-direction:column; gap:6px; }
+  .t2 { background:var(--card-2); border:1px solid var(--line); border-left:3px solid var(--c);
+        border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; min-height:62px; }
+  .t2.locked { border-color:var(--gold); border-left-color:var(--gold); background:#2a2416; }
+  .t2 .ttl { font-size:13px; font-weight:600; display:flex; align-items:center; gap:6px; }
+  .t2 .ttl .cls { font-size:10px; font-weight:700; color:#11141a; background:var(--c); padding:0 5px; border-radius:3px; }
+  .t2 .ttl .city { color:var(--gold); }
+  .t2 .ttl .right { margin-left:auto; font-size:11px; color:var(--dim); }
+  .t2 .fields { display:flex; flex-wrap:wrap; gap:5px; }
+  .chip { font-size:11px; background:#1a1e26; border:1px solid var(--line); border-radius:4px; padding:2px 7px; color:var(--dim); }
+  .chip b { color:var(--text); font-weight:600; }
+  .chip.hot { border-color:var(--c); color:var(--c); }
+  .chip.warn { border-color:var(--red); color:var(--red); }
+  .chip.ok { border-color:var(--green); color:var(--green); }
+  .t2 .bar { height:4px; background:#2a2f3b; border-radius:2px; overflow:hidden; }
+  .t2 .bar > i { display:block; height:100%; background:var(--c); }
+  .legend { display:flex; gap:14px; font-size:11px; color:var(--dim); margin:0 0 12px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin-right:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>任务板 · ABC 两类信息方案对照</h1>
+  <p class="lead">目标：按 A 采集 / B 制造 / C 人物 调整卡片信息，保持视觉一致性，同时把每类的「关键信息」表达清楚。<br>
+  三类关键信息差异：A=材料产量｜B=成品+需要图纸状态｜C=好感对象+稀有材料+需要图纸进度。</p>
+
+  <div class="legend">
+    <span><i style="background:var(--green)"></i>A 采集</span>
+    <span><i style="background:var(--blue)"></i>B 制造</span>
+    <span><i style="background:var(--r1)"></i>C 人物</span>
+  </div>
+
+  <!-- 方案1 -->
+  <div class="scheme">
+    <h2>方案 1 · 统一骨架 + 类别色编码 <span class="tag">色统型</span></h2>
+    <p class="desc">所有卡片用<strong>同一套骨架</strong>（标题 / 关键行 / 进度条），唯一差异是左侧类别色条 + 类别角标。<br>
+    关键行按类切换内容，但排版统一（左灰标签 + 右亮值）。改动最小、屏效最稳、一致性最强。</p>
+
+    <div class="b1">
+      <!-- A -->
+      <div class="t1 A">
+        <div class="ttl"><span class="cls">采</span><span class="city">上庸</span> · 矿场 · 凿山</div>
+        <div class="right">路程3格·赶路12秒</div>
+        <div class="key">产出 <b>铁石 ×5~7</b> · 品质 <b>3</b></div>
+        <div class="bar"><i style="width:40%"></i></div>
+      </div>
+      <!-- B -->
+      <div class="t1 B">
+        <div class="ttl"><span class="cls">制</span><span class="city">洛阳</span> · 铁匠铺 · 铸兵</div>
+        <div class="right">路程5格·赶路20秒</div>
+        <div class="key">成品 <b>环首刀</b> · 需要图纸 <b>✔ 已解锁</b></div>
+        <div class="bar"><i style="width:0%"></i></div>
+      </div>
+      <!-- B 卡门 -->
+      <div class="t1 B">
+        <div class="ttl"><span class="cls">制</span><span class="city">成都</span> · 机巧坊 · 制器</div>
+        <div class="right">路程7格·赶路28秒</div>
+        <div class="key">成品 <b>木牛流马</b> · 需要图纸 <b style="color:var(--red)">✘ 缺图·缺稀有</b></div>
+        <div class="bar"><i style="width:0%"></i></div>
+      </div>
+      <!-- C -->
+      <div class="t1 C">
+        <div class="ttl"><span class="cls">人</span><span class="city">荆州</span> · 道观 · 访道</div>
+        <div class="right">路程4格·赶路16秒</div>
+        <div class="key">好感 <b>关羽 +N</b> · 稀有 <b>朱砂</b> · 需要图纸 <b>72%</b></div>
+        <div class="bar"><i style="width:0%"></i></div>
+      </div>
+      <!-- 锁定（队首） -->
+      <div class="t1 locked">
+        <div class="ttl"><span class="cls" style="background:var(--gold);color:#1a1206">采</span><span class="city">上庸</span> · 矿场 · 凿山</div>
+        <div class="right">作业中</div>
+        <div class="key">产出 <b>铁石 ×5~7</b> · 品质 <b>3</b></div>
+        <div class="bar"><i style="width:55%"></i></div>
+      </div>
+    </div>
+    <p class="note">✅ 优点：骨架零变化、拖拽/进度条逻辑不动、视觉最统一、屏占最小。<br>
+    ⚠ 取舍：C 类的「好感对象 + 稀有 + 需要图纸%」被压成一行，信息偏挤；想看"离需要图纸还差多少"只能靠百分比文字。</p>
+  </div>
+
+  <!-- 方案2 -->
+  <div class="scheme">
+    <h2>方案 2 · 类别专属字段区 <span class="tag">结构化型</span></h2>
+    <p class="desc">卡片外壳仍统一，但第二行变成<strong>结构化字段块</strong>：用统一的「标签芯片 + 值」语法渲染，<br>
+    字段集合按类不同，但每个字段画法完全一致 → 视觉仍统一，信息密度更高。</p>
+
+    <div class="b2">
+      <!-- A -->
+      <div class="t2 A">
+        <div class="ttl"><span class="cls">采</span><span class="city">上庸</span> · 矿场 · 凿山 <span class="right">路程3格·赶路12秒</span></div>
+        <div class="fields">
+          <span class="chip">材料 <b>铁石</b></span>
+          <span class="chip hot">×5~7</span>
+          <span class="chip">品质 <b>3</b></span>
+        </div>
+        <div class="bar"><i style="width:40%"></i></div>
+      </div>
+      <!-- B 已解锁 -->
+      <div class="t2 B">
+        <div class="ttl"><span class="cls">制</span><span class="city">洛阳</span> · 铁匠铺 · 铸兵 <span class="right">路程5格·赶路20秒</span></div>
+        <div class="fields">
+          <span class="chip">成品 <b>环首刀</b></span>
+          <span class="chip ok">需要图纸 ✔</span>
+          <span class="chip">配方 <b>基础</b></span>
+        </div>
+        <div class="bar"><i style="width:0%"></i></div>
+      </div>
+      <!-- B 卡门 -->
+      <div class="t2 B">
+        <div class="ttl"><span class="cls">制</span><span class="city">成都</span> · 机巧坊 · 制器 <span class="right">路程7格·赶路28秒</span></div>
+        <div class="fields">
+          <span class="chip">成品 <b>木牛流马</b></span>
+          <span class="chip warn">需要图纸 ✘</span>
+          <span class="chip warn">缺 异邦图纸·藤甲料</span>
+        </div>
+        <div class="bar"><i style="width:0%"></i></div>
+      </div>
+      <!-- C -->
+      <div class="t2 C">
+        <div class="ttl"><span class="cls">人</span><span class="city">荆州</span> · 道观 · 访道 <span class="right">路程4格·赶路16秒</span></div>
+        <div class="fields">
+          <span class="chip">对象 <b>关羽</b></span>
+          <span class="chip hot">好感 +N</span>
+          <span class="chip">稀有 <b>朱砂</b></span>
+          <span class="chip">需要图纸 <b>72%</b></span>
+        </div>
+        <div class="bar"><i style="width:0%"></i></div>
+      </div>
+      <!-- 锁定 -->
+      <div class="t2 locked">
+        <div class="ttl"><span class="cls" style="background:var(--gold);color:#1a1206">采</span><span class="city">上庸</span> · 矿场 · 凿山 <span class="right">作业中</span></div>
+        <div class="fields">
+          <span class="chip">材料 <b>铁石</b></span>
+          <span class="chip hot">×5~7</span>
+          <span class="chip">品质 <b>3</b></span>
+        </div>
+        <div class="bar"><i style="width:55%"></i></div>
+      </div>
+    </div>
+    <p class="note">✅ 优点：每类关键信息一眼看清（C 的"在攒谁的好感、离需要图纸还差多少"直接呈现）；芯片语法统一，三类仍像同一组件。<br>
+    ⚠ 取舍：卡片略高（字段行 + 进度条），7 槽总高增加；需控制字段数（A≤3 / B≤3 / C≤4）防拥挤；缺料/卡门用红 chip 需与现有警告色协调。</p>
+  </div>
+</div>
+</body>
+</html>

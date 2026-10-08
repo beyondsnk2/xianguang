@@ -284,6 +284,17 @@ export interface Task {
    * 为空表示走旧口径（读 TaskDef.mainOutput）。
    */
   outputTag?: string;
+  /**
+   * C 类专属：生成时锁定的「本次好感对象」武将 tag。
+   * 让任务板在任务进行中即可显示具体角色（所见即所得）；结算时 maybeFirstMeet 用它做定向初识。
+   */
+  heroTag?: string;
+  /**
+   * C 类专属：生成时锁定的「本次稀有料」物品 tag（如 `zhusha_5`）。
+   * 用与结算完全相同的「本技能×本品质」候选池+权重锁定，使任务板显示的稀有料=结算实际给的（所见即所得）。
+   * 仅 q>=RARE_MIN_QUALITY 的 C 任务才有；空表示低品质/旧档（结算走原随机逻辑）。
+   */
+  rareTag?: string;
 }
 
 export type TaskSlot =

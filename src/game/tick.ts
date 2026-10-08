@@ -240,9 +240,17 @@ function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
     }
 
     // ── F28：事迹传播——完成任务的展示属性一对多涨相关武将好感 ──
-    propagateDeed(state, def);
-    // ── C 类「初识事件」：随机偶遇一位素未谋面的武将，正式建立关系 ──
-    if (def.cls === 'C') maybeFirstMeet(state);
+    // C 类 V6：仅当生成时掷骰命中（heroTag 非空）才触发武将好感；否则本次 C 任务不产出好感，
+    // 只产出稀有/图纸等材料（produce.ts）。非 C 任务照旧走事迹传播。
+    if (def.cls === 'C') {
+      if (task.heroTag) {
+        propagateDeed(state, def);
+        maybeFirstMeet(state, task.heroTag);
+      }
+      // 无 heroTag：本次 C 任务不结识武将、不涨好感
+    } else {
+      propagateDeed(state, def);
+    }
 
     // ── 随机事件·行为源②③：首次造访设施 / 完成高品质任务 ──
     if (def.nodeType && !state.visitedFacilities.includes(def.nodeType)) {

@@ -11,9 +11,12 @@
   --red: #d1614f;
   --blue: #5b9fd6;
   --radius: 10px;
-  /* 最小色板（稀有度三档）：普通灰 / 稀有蓝紫 / 传说金橙 */
+  /* 类别色板（仅用于卡片框 + 角标，不与奖励共用）：A绿 / B蓝 / C紫(r1) / 激活金(gold) */
   --r1: #8f8ae0;
   --r2: #e8a33d;
+  /* 稀有度色板（仅用于奖励芯片 inset 内框 + 淡底，独立色相，去冲突）：稀有青 / 传说玫红 */
+  --rar-rare: #36c2d6;
+  --rar-legend: #d95fa8;
 }
 
 * { box-sizing: border-box; }
@@ -147,7 +150,21 @@ button.active { background: var(--gold); color: #1a1206; border-color: var(--gol
   display: flex; align-items: center; justify-content: space-between;
 }
 .h2-actions { display: flex; gap: 6px; align-items: center; }
-.board-total { font-size: 11px; font-weight: 600; color: var(--gold); letter-spacing: 0; }
+.board-total { position: relative; font-size: 20px; font-weight: 700; color: var(--gold); letter-spacing: 0; line-height: 1; }
+/* 重排导致总时长变化时，在「总时长」文字结尾（右侧）弹出的差值气泡 */
+.total-delta {
+  position: absolute; left: 100%; top: 50%; margin-left: 8px;
+  font-size: 13px; font-weight: 700; white-space: nowrap; pointer-events: none;
+  animation: total-delta-float 2s ease-out forwards;
+}
+.total-delta.up { color: #ef4444; }   /* 变长（更耗时）= 警示红 */
+.total-delta.down { color: #22c55e; } /* 变短（更高效）= 正向绿 */
+@keyframes total-delta-float {
+  0%   { transform: translate(0, -50%); opacity: 0; }
+  12%  { opacity: 1; }
+  72%  { transform: translate(0, -50%); opacity: 1; }
+  100% { transform: translate(0, calc(-50% - 26px)); opacity: 0; }
+}
 .tip { margin: 8px 0 0; font-size: 11px; color: #6b7280; line-height: 1.6; }
 
 /* ── 状态 ── */
@@ -163,26 +180,41 @@ button.active { background: var(--gold); color: #1a1206; border-color: var(--gol
 /* ── 任务板 ── */
 .task-board { display: flex; flex-direction: column; gap: 6px; }
 .task {
-  background: var(--card-2); border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 10px; display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center;
+  background: var(--card-2); border: 1px solid var(--line); border-left: 3px solid var(--line);
+  border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
 }
-.task.locked { border-color: var(--gold); background: #2a2416; }
+/* 类别色编码：左竖条 + 角标底色，三类统一语法（A绿/B蓝/C紫），视觉一致 */
+.task.cls-A { --c: var(--green); border-left-color: var(--c); }
+.task.cls-B { --c: var(--blue); border-left-color: var(--c); }
+.task.cls-C { --c: var(--r1); border-left-color: var(--c); }
+.task.locked { border-color: var(--gold); border-left-color: var(--gold); background: #2a2416; }
 .task.draggable { cursor: grab; }
 .task.drag-over { outline: 1px dashed var(--gold); }
-.task.empty { color: var(--dim); background: #1a1e26; }
-.task-idx { color: #6b7280; font-size: 11px; text-align: center; }
-.task-title { font-size: 13px; font-weight: 600; }
+.task.empty { color: var(--dim); background: #1a1e26; border-left-color: var(--line); }
+.task-head { display: flex; align-items: center; gap: 6px; }
+.task-title { font-size: 13px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-title .city { color: var(--gold); }
 /* 任务类别角标（采=A采集 / 制=B制造 / 人=C人物） */
 .cls-tag {
-  display: inline-block; margin-right: 5px; padding: 0 4px; border-radius: 3px;
-  font-size: 10px; font-weight: 600; color: var(--dim);
-  border: 1px solid var(--line); background: #1a1e26; vertical-align: 1px;
+  display: inline-block; padding: 0 5px; border-radius: 3px;
+  font-size: 10px; font-weight: 700; color: #11141a; background: var(--dim);
+  border: 1px solid transparent; flex: 0 0 auto;
 }
-.task-sub { font-size: 11px; color: var(--dim); margin-top: 2px; }
-.task-right { text-align: right; font-size: 11px; color: var(--dim); }
-.task-right b { color: var(--text); }
-.task-progress { grid-column: 1 / -1; height: 4px; background: #2a2f3b; border-radius: 2px; overflow: hidden; }
+.task.cls-A .cls-tag, .task.cls-B .cls-tag, .task.cls-C .cls-tag { background: var(--c); }
+.task-right { font-size: 11px; color: var(--dim); flex: 0 0 auto; text-align: right; margin-left: 8px; white-space: nowrap; }
+/* 结构化字段块：统一「标签芯片 + 值」语法，按类别渲染不同字段集合 */
+.task-fields { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { font-size: 11px; background: #1a1e26; border: 1px solid #444c5c; border-radius: 4px; padding: 2px 7px; color: var(--dim); }
+.chip b { color: var(--text); font-weight: 600; }
+.chip.hot { border-color: var(--c); color: var(--c); }
+.chip.warn { border-color: var(--red); color: var(--red); }
+.chip.ok { border-color: var(--green); color: var(--green); }
+/* 稀有度三档：普通（无框，仅默认底）/ 稀有（青）/ 传说（玫红）。
+   以「底色 + 内框(inset ring)」表达，独立于 mod 的边框色与类别色，不靠文字即可读出稀有度。
+   稀有度改用独立色相（青/玫红），不再借用 C 类别紫(--r1) 与 激活金(--r2)，消除一色多义。 */
+.chip.r-rare { background: rgba(54,194,214,0.15); box-shadow: inset 0 0 0 1.5px var(--rar-rare); }
+.chip.r-legend { background: rgba(217,95,168,0.15); box-shadow: inset 0 0 0 1.5px var(--rar-legend); }
+.task-progress { height: 4px; background: #2a2f3b; border-radius: 2px; overflow: hidden; }
 .task-progress > i { display: block; height: 100%; background: var(--gold); }
 
 /* ── 背包 ── */

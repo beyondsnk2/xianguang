@@ -8,7 +8,7 @@ import { runSelfCheck } from './game/selfcheck';
 import { OFFLINE_CAP_HOURS, SAVE_VERSION } from './game/constants';
 import type { GameConfig, GameState } from './game/types';
 import { MapRenderer } from './render/map';
-import { autoSort, TaskBoard } from './ui/taskList';
+import { autoSort, TaskBoard, computeTotalSeconds, flashTotalDelta } from './ui/taskList';
 import {
   renderBag,
   renderCharacter,
@@ -112,10 +112,13 @@ async function boot(): Promise<void> {
       const item = state.slots[from];
       if (!item || item.kind !== 'task') return;
       if (item.task.id === state.currentTaskId) return; // 队首锁定
+      const before = computeTotalSeconds(state, cfg, graph);
       state.slots.splice(from, 1);
       state.slots.splice(to, 0, item);
       normalizeSlots(state); // 空槽始终留在队尾
       syncPhase(state, ctx);
+      const after = computeTotalSeconds(state, cfg, graph);
+      flashTotalDelta(Math.round((after - before) / 60));
       refreshUI();
     },
   });
@@ -345,9 +348,12 @@ async function boot(): Promise<void> {
   }
 
   el('btn-autosort').addEventListener('click', () => {
+    const before = computeTotalSeconds(state, cfg, graph);
     autoSort(state, cfg, graph);
     normalizeSlots(state);
     syncPhase(state, ctx);
+    const after = computeTotalSeconds(state, cfg, graph);
+    flashTotalDelta(Math.round((after - before) / 60));
     refreshUI();
     toast('已按最近邻重排（队首不动）');
   });

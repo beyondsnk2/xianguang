@@ -153,12 +153,43 @@ export function propagateDeedAttrs(state: GameState, shown: Set<AttrKey>): void 
 }
 
 /**
- * C 类（人物）任务结算时的「初识事件」：按概率随机偶遇一位**素未谋面**的武将，
- * 一次性注入 `REL_FIRST_MEET` 好感正式建立关系，并写一条偶遇日志。
- * 设计 §五：初识随机触发、不由玩家前置选择决定。
- * @returns 本次初识的武将 tag（未触发返回 null）
+ * 生成 C 类任务时预锁定「本次好感对象」：
+ * 1) 若玩家已选攻略对象（state.target）且尚素未谋面 → 直接锁定 target（定向攒攻略对象）；
+ * 2) 否则从「素未谋面」池随机抽一位（保留初识新武将的玩法感）；
+ * 3) 若全员已结识 → 全池随机一位（仍会收到事迹传播好感）。
+ * 这样任务板在任务进行中即可显示具体角色（所见即所得）。
  */
-export function maybeFirstMeet(state: GameState): string | null {
+export function pickFirstMeetHero(state: GameState): string {
+  const target = state.target;
+  if (target && (state.relations[target] ?? 0) <= 0) return target; // 定向攻略对象（素未谋面）
+  const unmet = GENERALS.filter((g) => (state.relations[g.tag] ?? 0) <= 0);
+  if (unmet.length) {
+    const g = pickOne(state, unmet);
+    if (g) return g.tag;
+  }
+  const g = pickOne(state, GENERALS);
+  if (g) return g.tag;
+  return GENERALS[0]?.tag ?? 'liubei'; // 兜底：GENERALS 恒非空
+}
+
+/**
+ * C 类（人物）任务结算时的「初识事件」。
+ * - 传入 `forcedTag`（生成时锁定的 heroTag）→ 必定对这位武将建立/确认关系（素未谋面则注入 `REL_FIRST_MEET` 并写日志，已结识则跳过初识事件），返回该 tag。实现「所见即所得」：卡片显示的 = 结算实际加好感的。
+ * - 不传 forcedTag（旧档/兼容）→ 走原逻辑：按 `REL_FIRST_MEET_CHANCE` 概率随机偶遇一位素未谋面的武将。
+ * @returns 本次初识/锁定的武将 tag（未触发返回 null）
+ */
+export function maybeFirstMeet(state: GameState, forcedTag?: string | null): string | null {
+  if (forcedTag != null) {
+    const g = generalByTag[forcedTag];
+    if (!g) return null;
+    const cur = state.relations[forcedTag] ?? 0;
+    if (cur <= 0) {
+      state.relations[forcedTag] = REL_FIRST_MEET;
+      emitEvent(state, `人物任务中结交${g.faction}${g.name}，初识之缘 +${REL_FIRST_MEET}`, 1, 'meet');
+    }
+    return forcedTag;
+  }
+  // ── 向后兼容：无 forcedTag 时保持原随机偶遇语义 ──
   if (randFloat(state) >= REL_FIRST_MEET_CHANCE) return null;
   const unmet = GENERALS.filter((g) => (state.relations[g.tag] ?? 0) <= 0);
   if (unmet.length === 0) return null;

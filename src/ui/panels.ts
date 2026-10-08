@@ -619,7 +619,7 @@ export function renderFeed(root: HTMLElement, state: GameState): void {
   const want = new Set(items.map((e) => e.seq));
 
   // 首次渲染：全量铺开，且不带动画（否则开局满屏一起闪）
-  if (!feedInit || root.children.length === 0) {
+  if (!feedInit) {
     root.innerHTML = items.length
       ? items.map((e) => evRow(e, false)).join('')
       : '<div class="ev-empty">暂无记录</div>';
@@ -627,6 +627,20 @@ export function renderFeed(root: HTMLElement, state: GameState): void {
     feedInit = true;
     return;
   }
+
+  // 无记录：稳定显示「暂无记录」占位，避免每帧重建导致闪烁。
+  // 仅当占位缺失时才重建（如重置存档后残留旧节点），已显示则不触碰。
+  if (items.length === 0) {
+    if (!root.querySelector('.ev-empty')) {
+      root.innerHTML = '<div class="ev-empty">暂无记录</div>';
+      feedSeen.clear();
+    }
+    return;
+  }
+
+  // 有记录：确保占位已清除
+  const empty = root.querySelector('.ev-empty');
+  if (empty) empty.remove();
 
   // 被挤出事件流（超过 EVENT_LIMIT）的旧节点移除
   for (const node of Array.from(root.children)) {
@@ -636,8 +650,6 @@ export function renderFeed(root: HTMLElement, state: GameState): void {
       node.remove();
     }
   }
-  const empty = root.querySelector('.ev-empty');
-  if (empty) empty.remove();
 
   // 新事件：按 seq 升序插入顶部，最终最新在最上；只有它们带 fresh 动画
   const fresh = items.filter((e) => !feedSeen.has(e.seq)).sort((a, b) => a.seq - b.seq);

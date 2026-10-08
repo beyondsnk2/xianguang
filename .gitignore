@@ -25,3 +25,8 @@ config/*.backup_*.xlsx
 
 # 文档复制副本（非工程源码）
 doc/V2 - 副本/
+
+# 运行/清理过程的临时标记文件（非工程源码）
+.clean_done.txt
+.kill_done.txt
+.port_check.txt
