@@ -11,6 +11,7 @@ import { buildTaskIndex, genTask } from './taskGen';
 import { ensureRelations, GENERALS } from './generals';
 import { emitEvent } from './events';
 import { ensureEventFields } from './event';
+import { syncStandings } from './classSystem';
 
 /** 出生在州府 2×2 的哪一格：固定取「最左上」一格，避免随机导致存档不一致（D1） */
 export function pickSpawnCell(nodeCells: Cell[]): Cell {
@@ -41,6 +42,12 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
     target: null,
     ambition: 'free',
     pace: 'mid',
+    // ── V6 职业 / 身份 ──
+    activeClass: null,
+    classLv: {},
+    classExp: {},
+    classSwitchCd: null,
+    standingActive: [],
     blueprints: [],
     events: [],
     nextEventSeq: 1,
@@ -121,6 +128,13 @@ export function ensureRuntimeFields(state: GameState, cfg: GameConfig): void {
   if (state.ambition !== 'free' && state.ambition !== 'wen' && state.ambition !== 'wu' && state.ambition !== 'zong' && state.ambition !== 'fang') {
     state.ambition = 'free';
   }
+  // ── V6 职业 / 身份兜底 ──
+  if (typeof state.activeClass !== 'string') state.activeClass = null;
+  if (!state.classLv || typeof state.classLv !== 'object') state.classLv = {};
+  if (!state.classExp || typeof state.classExp !== 'object') state.classExp = {};
+  if (typeof state.classSwitchCd !== 'number') state.classSwitchCd = null;
+  if (!Array.isArray(state.standingActive)) state.standingActive = [];
+  syncStandings(state, cfg);
   if (state.pace !== 'steady' && state.pace !== 'mid' && state.pace !== 'bold') {
     state.pace = 'mid';
   }

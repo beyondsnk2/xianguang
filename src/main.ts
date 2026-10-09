@@ -6,6 +6,7 @@ import { syncPhase, tick, type TickCtx } from './game/tick';
 import { loadState, saveState, clearSave, hasSave, TabLeader } from './game/save';
 import { runSelfCheck } from './game/selfcheck';
 import { OFFLINE_CAP_HOURS, SAVE_VERSION } from './game/constants';
+import { canSwitchClass, setActiveClass } from './game/classSystem';
 import type { GameConfig, GameState } from './game/types';
 import { MapRenderer } from './render/map';
 import { autoSort, TaskBoard, computeTotalSeconds, flashTotalDelta } from './ui/taskList';
@@ -263,6 +264,23 @@ async function boot(): Promise<void> {
       state.pace = sel.value as GameState['pace'];
       renderModal(true);
       refreshUI();
+    } else if (sel.id === 'class-select') {
+      const now = Date.now();
+      if (!sel.value) {
+        state.activeClass = null;
+        renderModal(true);
+        refreshUI();
+      } else {
+        const ok = setActiveClass(state, cfg, sel.value, now);
+        if (!ok) {
+          const chk = canSwitchClass(state, cfg, now);
+          pushLog(state, chk.reason || '无法切换职业', now);
+        } else {
+          pushLog(state, `转职为「${cfg.classByTag[sel.value]?.name ?? sel.value}」`, now);
+        }
+        renderModal(true);
+        refreshUI();
+      }
     }
   });
   modalBody.addEventListener('click', (ev) => {

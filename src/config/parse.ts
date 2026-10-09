@@ -20,6 +20,13 @@ import {
   type StateDef,
   type SubCatRatioRow,
   type TaskDef,
+  type ClassDef,
+  type ClassAffinityRow,
+  type ClassEffectRow,
+  type ClassPromoteCondRow,
+  type StandingDef,
+  type AffLevel,
+  type PromoteType,
 } from '../game/types';
 
 // ───────────────────────── 通用取值助手 ─────────────────────────
@@ -278,6 +285,56 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     note: asStr(r['note']),
   })).filter((s) => s.tag);
 
+  // classDefs / classAffinity / classPromoteCond / classEffect / standingDefs（V6 职业/身份系统）
+  const classDefs: ClassDef[] = (tables['classDefs'] ?? []).map((r) => ({
+    classType: asStr(r['classType']),
+    name: asStr(r['name']),
+    promoteCond: asStr(r['promoteCond']) || null,
+    rankCount: asNum(r['rankCount'], 9),
+    note: asStr(r['note']),
+  })).filter((c) => c.classType);
+  const classByTag: Record<string, ClassDef> = {};
+  for (const c of classDefs) classByTag[c.classType] = c;
+
+  const classAffinity: ClassAffinityRow[] = (tables['classAffinity'] ?? []).map((r) => ({
+    classType: asStr(r['classType']),
+    skill: asStr(r['skill']),
+    aff: (asStr(r['aff']) === 'main' ? 'main' : asStr(r['aff']) === 'sub' ? 'sub' : 'main') as AffLevel,
+  })).filter((a) => a.classType && a.skill);
+  const classAffinityMap: Record<string, Record<string, AffLevel>> = {};
+  for (const a of classAffinity) {
+    if (!classAffinityMap[a.classType]) classAffinityMap[a.classType] = {};
+    classAffinityMap[a.classType][a.skill] = a.aff;
+  }
+
+  const classPromoteCond: ClassPromoteCondRow[] = (tables['classPromoteCond'] ?? []).map((r) => ({
+    condId: asStr(r['condId']),
+    type: asStr(r['type']) as PromoteType,
+    target: asStr(r['target']),
+    threshold: asNum(r['threshold'], 0),
+    note: asStr(r['note']),
+  })).filter((c) => c.condId);
+  const classPromoteCondByTag: Record<string, ClassPromoteCondRow> = {};
+  for (const c of classPromoteCond) classPromoteCondByTag[c.condId] = c;
+
+  const classEffect: ClassEffectRow[] = (tables['classEffect'] ?? []).map((r) => ({
+    classType: asStr(r['classType']),
+    rank: asNum(r['rank'], 1),
+    effectKey: asStr(r['effectKey']),
+    value: asNum(r['value'], 0),
+    note: asStr(r['note']),
+  })).filter((e) => e.classType && e.effectKey);
+
+  const standingDefs: StandingDef[] = (tables['standingDefs'] ?? []).map((r) => ({
+    standingTag: asStr(r['standingTag']),
+    name: asStr(r['name']),
+    reqClasses: asStr(r['reqClasses']),
+    reqStandings: asStr(r['reqStandings']),
+    note: asStr(r['note']),
+  })).filter((s) => s.standingTag);
+  const standingByTag: Record<string, StandingDef> = {};
+  for (const s of standingDefs) standingByTag[s.standingTag] = s;
+
   // item（材料 27 / 稀有 54 / 成品 315 / 名品 3）
   const items: ItemDef[] = (tables['item'] ?? []).map((r) => {
     const tierRaw = asStr(r['tier']);
@@ -447,6 +504,13 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     initAttr: {} as Record<AttrKey, Range>,
     // V4 金钱：config 表缺列时回落 INIT_MONEY（旧配置不崩，但经济系统本就因无 price 表而禁用）
     initMoney: asNum(rawCfg['initMoney'], INIT_MONEY),
+    // V6 职业系统开关（缺列回落合理默认值；新配置应显式给）
+    classUnlockSkillLvTotal: asNum(rawCfg['classUnlockSkillLvTotal'], 10),
+    classSkillWeight: asNum(rawCfg['classSkillWeight'], 4),
+    classSwitchCdSec: asNum(rawCfg['classSwitchCdSec'], 3600),
+    classSlotBase: asNum(rawCfg['classSlotBase'], 1),
+    classSlotStep: asNum(rawCfg['classSlotStep'], 3),
+    classExpPerQuality: asNum(rawCfg['classExpPerQuality'], 3),
   };
   const initRangeCfg: [AttrKey, string][] = [
     ['force', 'initForce'],
@@ -496,6 +560,14 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     priceRows,
     priceByKey,
     subCatRatio,
+    classDefs,
+    classByTag,
+    classAffinityMap,
+    classPromoteCond,
+    classPromoteCondByTag,
+    classEffect,
+    standingDefs,
+    standingByTag,
   };
 
   // ── 校验 ──
@@ -613,5 +685,27 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     }
   }
 
+  // ── V6 职业系统校验 ──
+  if (classDefs.length) {
+    const affClasses = new Set(classAffinity.map((a) => a.classType));
+    for (const c of classDefs) {
+      if (!affClasses.has(c.classType)) warnings.push(`classDefs ${c.classType} 在 classAffinity 表无亲密度行`);
+      if (c.promoteCond) {
+        for (const id of c.promoteCond.split(';')) {
+          const cid = id.trim();
+          if (cid && !classPromoteCondByTag[cid]) warnings.push(`classDefs ${c.classType} 的 promoteCond=${cid} 在 classPromoteCond 表缺失`);
+        }
+      }
+    }
+    for (const a of classAffinity) {
+      if (!cfg_skillHasTag(skillDefs, a.skill)) warnings.push(`classAffinity ${a.classType}/${a.skill} 的技能 tag 不在 skill 表`);
+    }
+  }
+
   return { config, warnings };
+}
+
+/** 校验技能 tag 是否存在于 skill 表（V6 职业亲密度引用） */
+function cfg_skillHasTag(skillDefs: SkillDef[], tag: string): boolean {
+  return skillDefs.some((s) => s.tag === tag);
 }

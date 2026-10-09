@@ -4,11 +4,14 @@ import { C_FAVOR_CHANCE, C_MIN_QUALITY, RARE_MIN_QUALITY } from './constants';
 import type { AmbitionKey, GameState, PaceKey } from './types';
 import { qualityWeights, qualityWindow, skillTier } from './skill';
 import { pickFirstMeetHero } from './generals';
+import { classAffinitySkills, isClassUnlocked } from './classSystem';
 
 /**
  * 抱负 → 偏好技能集合（设计 §8.6）。
  * 每抱负 = 1A 采集 + 1B 制造 + 1C 人物，四抱负并集覆盖全部 9 技能、无暗偏。
  * `free` 为空 → 全技能等概率（旧档/未选抱负时）。
+ * 注：职业系统解锁后，路由改由「生效职业的亲密度」驱动（见 classSystem.prefSkillTags），
+ * 此表仅作为职业系统未解锁时的兜底成长定向。
  */
 export const AMBITION_SKILLS: Record<AmbitionKey, string[]> = {
   free: [],
@@ -17,9 +20,6 @@ export const AMBITION_SKILLS: Record<AmbitionKey, string[]> = {
   zong: ['mining', 'crafting', 'envoy'],
   fang: ['herbalism', 'alchemy', 'sworn'],
 };
-
-/** 偏好技能相对权重（其余为 1）→ 约 2/3 生成任务的技能落在抱负集合内 */
-const AMBITION_SKILL_WEIGHT = 4;
 
 /** 节奏 → 品质窗口偏移（钳制在 1–9）：稳压低、搏抬高，不绑死抱负 */
 export const PACE_OFFSET: Record<PaceKey, number> = {
@@ -170,9 +170,14 @@ function pickRareTag(state: GameState, cfg: GameConfig, def: TaskDef): string | 
 function pickTaskDef(state: GameState, cfg: GameConfig, idx: TaskIndex): TaskDef | null {
   if (!idx.skillTags.length) return pickOne(state, idx.availableTasks);
 
-  // 抱负加权：偏好的技能获得更高权重；free 全平等
-  const ambSkills = AMBITION_SKILLS[state.ambition] ?? [];
-  const skillWeights = idx.skillTags.map((s) => (ambSkills.includes(s) ? AMBITION_SKILL_WEIGHT : 1));
+  // 职业路由优先：职业系统解锁且已选生效职业 → 用其亲密度技能作为偏好（权重取 cfg.values.classSkillWeight）；
+  // 否则回退旧 ambition（free → 全技能等概率）。
+  const pref =
+    isClassUnlocked(state, cfg) && state.activeClass
+      ? classAffinitySkills(cfg, state.activeClass)
+      : (AMBITION_SKILLS[state.ambition] ?? []);
+  const prefWeight = cfg.values.classSkillWeight;
+  const skillWeights = idx.skillTags.map((s) => (pref.includes(s) ? prefWeight : 1));
   const skill = pickWeighted(state, idx.skillTags, skillWeights);
   if (!skill) return null;
   const all = idx.tasksBySkill.get(skill) ?? [];

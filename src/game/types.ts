@@ -206,6 +206,66 @@ export interface AttrLvRow {
   num: number; // 本级升到下一级所需经验
 }
 
+// ────────────────────────────── 职业 / 身份系统（V6 起） ──────────────────────────────
+// 职业（class）= 统一的成长定向路由层，取代旧 ambition；身份（standing）= 职业组合解锁的稀有一次性目标 + 上阵槽。
+// 字段名统一 class 前缀；参数全部抽 config，不写死代码。
+
+/** 职业亲密度档位：main = ★ 主锚（强路由偏置 + 主效果），sub = ◐ 次锚（弱偏置） */
+export type AffLevel = 'main' | 'sub';
+
+/**
+ * 晋身条件四型：
+ *   a_rep      代表作   —— 某技能达到指定等级（target=技能tag, threshold=技能Lv）
+ *   b_general   武将举荐 —— 与某武将好感达标（target=武将tag 或 'any', threshold=好感值）
+ *   c_standing  身份引   —— 已获得某身份（target=身份tag, threshold 忽略）
+ *   d_train     历练达标 —— 属性或总技能等级达标（target=属性key 或 'totalSkillLv', threshold=值）
+ */
+export type PromoteType = 'a_rep' | 'b_general' | 'c_standing' | 'd_train';
+
+/** 职业线定义（classDefs 表） */
+export interface ClassDef {
+  classType: string; // youxia / shanggu / gongjiang / mengjiang / danshi / fangshi / moushi
+  name: string;
+  /** classPromoteCond.condId；可 ';' 分隔做多条件组合（V1 单条件） */
+  promoteCond: string | null;
+  rankCount: number; // 职业阶数（默认 9）
+  note: string;
+}
+
+/** 职业 × 技能 亲密度（classAffinity 表；路由偏置层） */
+export interface ClassAffinityRow {
+  classType: string;
+  skill: string;
+  aff: AffLevel;
+}
+
+/** 晋身条件实例（classPromoteCond 表；每个职业的「开线条件」一行，四型覆盖全部职业） */
+export interface ClassPromoteCondRow {
+  condId: string;
+  type: PromoteType;
+  target: string; // a_rep→技能tag / b_general→武将tag('any') / c_standing→身份tag / d_train→属性key('totalSkillLv')
+  threshold: number;
+  note: string;
+}
+
+/** 职业每阶效果（classEffect 表；key→value，按 rank 累计取值，粗颗粒非平滑） */
+export interface ClassEffectRow {
+  classType: string;
+  rank: number; // 1..rankCount
+  effectKey: string; // gatherYield / craftSave / socialFavor / attrForce / attrIntel / attrLead / attrPol ...
+  value: number; // 乘率用小数、属性用绝对值；语义由消费方约定
+  note: string;
+}
+
+/** 身份（standingDefs 表）：职业组合解锁的稀有目标；不可降级；玩家选上阵槽生效 */
+export interface StandingDef {
+  standingTag: string;
+  name: string;
+  reqClasses: string; // 'mengjiang:4;youxia:4'（classType:lv 分号分隔）
+  reqStandings: string; // 前置身份（软互斥用加成实现时填；分号分隔）
+  note: string;
+}
+
 export interface ConfigValues {
   speed: number; // 秒/格
   backPackSlotNum: number; // 背包格数
@@ -215,6 +275,17 @@ export interface ConfigValues {
   initAttr: Record<AttrKey, Range>; // 初始四维区间
   /** V4 初始金钱（文）；config 表缺列时回落 `INIT_MONEY` */
   initMoney: number;
+  /** V6 职业系统总开关：Σ技能等级 > 此值才解锁职业路由（默认 10） */
+  classUnlockSkillLvTotal: number;
+  /** V6 职业偏好技能相对权重（其余为 1） */
+  classSkillWeight: number;
+  /** V6 切换职业冷却（秒）；小代价 */
+  classSwitchCdSec: number;
+  /** V6 身份上阵位：基数 + 每累计 N 点职业总等级 +1 */
+  classSlotBase: number;
+  classSlotStep: number;
+  /** V6 职业经验：每次完成亲密度技能任务给 `classExpPerQuality × 品质`（粗颗粒，非平滑） */
+  classExpPerQuality: number;
 }
 
 export interface ConfigMeta {
@@ -267,6 +338,16 @@ export interface GameConfig {
   rareSubCatWeightBySkill: Record<string, Record<string, number>>;
   /** 该级升到下一级所需经验；超出表长返回 null（已满级） */
   attrLvNeed: (lv: number) => number | null;
+  // ── V6 职业 / 身份系统 ──
+  classDefs: ClassDef[];
+  classByTag: Record<string, ClassDef>;
+  /** 职业 → 技能 → 亲密度（路由偏置层）；缺表为空对象 */
+  classAffinityMap: Record<string, Record<string, AffLevel>>;
+  classPromoteCond: ClassPromoteCondRow[];
+  classPromoteCondByTag: Record<string, ClassPromoteCondRow>;
+  classEffect: ClassEffectRow[];
+  standingDefs: StandingDef[];
+  standingByTag: Record<string, StandingDef>;
   values: ConfigValues;
 }
 
@@ -404,6 +485,16 @@ export interface GameState {
   ambition: AmbitionKey;
   /** 节奏（品质窗口偏置）：稳/中/搏 */
   pace: PaceKey;
+  /** V6 当前生效职业（职业系统解锁且已晋身某线后非空）；null = 未选/未解锁 */
+  activeClass: string | null;
+  /** V6 各职业等级（阶）Record<classType, number> */
+  classLv: Record<string, number>;
+  /** V6 各职业经验 Record<classType, number> */
+  classExp: Record<string, number>;
+  /** V6 切换职业冷却到期时间戳（ms）；0/null = 无冷却 */
+  classSwitchCd: number | null;
+  /** V6 已上阵身份 tag 列表（不可降级，仅增） */
+  standingActive: string[];
   /** 已解锁图纸 tag（一次性解锁，永久有效） */
   blueprints: string[];
 

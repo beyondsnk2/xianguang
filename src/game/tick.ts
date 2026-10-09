@@ -15,6 +15,7 @@ import { rollRange } from './rng';
 import { passEval, rollEval } from './eval';
 import { settleOutput } from './produce';
 import { addSkillXp } from './skill';
+import { gainClassExp, syncStandings } from './classSystem';
 import { propagateDeed, maybeFirstMeet } from './generals';
 import { advanceEventClock, expireEvents, tryTriggerEvent } from './event';
 import type { TaskRecorder } from './taskLog';
@@ -229,6 +230,12 @@ function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
     // ── T2：技能经验（只升区间，不动 needTime） ──
     const skillXp = def.skill ? SKILL_XP_PER_QUALITY * Math.max(1, def.quality) : 0;
     if (def.skill) addSkillXp(state, ctx.cfg, def.skill, skillXp);
+
+    // ── V6：职业经验（仅生效职业的亲密度技能任务涨经验；不同轴、粗颗粒、非平滑） ──
+    if (def.skill) {
+      gainClassExp(state, ctx.cfg, def.skill, ctx.cfg.values.classExpPerQuality * Math.max(1, def.quality));
+      syncStandings(state, ctx.cfg); // 晋阶后即时判定身份解锁（不可降级）
+    }
 
     // ── T5：三类收益分化（完整入包，不截断、不丢弃） ──
     const rewards = settleOutput(state, ctx.cfg, def, evalRes, task);

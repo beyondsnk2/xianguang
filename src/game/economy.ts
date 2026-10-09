@@ -125,3 +125,10 @@ export function buyPrice(
   const sub = cfg.itemByTag[itemTag]?.subCat ?? '';
   return Math.round(base * cityRatio(demand, cityTag, sub) * BUY_PREMIUM);
 }
+
+// 城际供需系数表懒构建一次并缓存（纯 cfg 派生，确定性；避免每次结算/渲染重复算）
+let _demandCache: Record<string, Record<string, number>> | null = null;
+export function getDemand(cfg: GameConfig): Record<string, Record<string, number>> {
+  if (!_demandCache) _demandCache = buildDemand(cfg);
+  return _demandCache;
+}

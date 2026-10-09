@@ -3,6 +3,8 @@ import { pathToNode } from '../game/graph';
 import type { Graph } from '../game/graph';
 import { fmtDur, itemName } from './format';
 import { BLUEPRINT_MIN_FAVOR, BLUEPRINT_MIN_QUALITY, rareCountByEval } from '../game/constants';
+import { ownedCount } from '../game/inventory';
+import { buyPrice, getDemand } from '../game/economy';
 
 export interface BoardCallbacks {
   /** 把第 from 个槽的任务移动到第 to 个位置 */
@@ -131,7 +133,7 @@ export class TaskBoard {
   /**
    * 按类别构建「标签芯片 + 值」字段块 HTML。
  * - A 采集：产出（材料名 ×产量区间 · 品质，合并为单底框；标题已含材料名，不重复）
- * - B 制造：成品 / 需要图纸（✔已解锁·缺图+缺料，仅高阶任务）
+ * - B 制造：成品(hot) / 门槛层[图纸✔·缺图 / 主料×K ✔·缺 / 主稀 ✔·缺]（红=卡住零产出）/ 加成层[额外料×K ✔·缺 / 额外稀 ✔·缺]（中性=少产不拦工）；齐备按「库存≥每件需求」判定
  * - C 人物：好感度（仅 heroTag 命中 10% 概率时显示类别标签，不透露具体武将）/ 稀有（仅 q>=4 且生成时锁定的具体稀有料才显示「名 ×数量」）/ 图纸（仅当图纸门槛全部满足时显示"有机会"，不恒显）
    * 所有字段统一用 .chip 语法渲染，三类视觉一致；hot 取类别色、warn 取警告红、ok 取通过绿。
    * 每个芯片再叠加稀有度类（r-common/r-rare/r-legend，按 def.quality 分档），以底色+内框表达稀有度，不靠文字。
@@ -154,20 +156,66 @@ export class TaskBoard {
       const val = [range ? '×' + range : '', q].filter(Boolean).join(' · ');
       parts.push(chip('产出', name ? `${name}${val ? ' ' + val : ''}` : val, 'hot'));
     } else if (def.cls === 'B') {
+      // B 类 = 制造。配方分两层，面板也分层显示，直接回答「材料齐备吗」「有额外料吗」。
+      // 门槛层（缺则零产出）：图纸 + 基础主料(needItem1×needItem1Num) + 基础稀有(needRare)
+      // 加成层（缺则少产、不拦开工）：额外辅料(needItem2×needItem2Num) + 额外稀有(needRare2)
+      // E3 自动补货（仅材料，红线⑦ 不补稀有；全有或全无）：主料/额外料不够且金币够买全部缺口 → 显「补」(ok)并标耗金；
+      //   否则维持「缺」(warn)，且不显额外料信息。主稀/额外稀是稀有，永不自动买 → 缺=真卡点。
+      // 齐备判定用「库存 ≥ 名义每件需求」(≥1 件即可开工)，与结算买入口径一致（面板金价=实际支出）。
       const outTag = task.outputTag || def.mainOutput || '';
       parts.push(chip('成品', outTag ? itemName(outTag, cfg) : def.name, 'hot'));
       const recipe = outTag ? cfg.recipeByResult[outTag] : null;
-      const needBp = recipe?.needBlueprint || null;
-      if (needBp && recipe) {
-        const has = state.blueprints.includes(needBp);
-        parts.push(chip('需要图纸', has ? '✔' : '缺图', has ? 'ok' : 'warn'));
-        if (!has) {
-          const miss = [recipe.needRare, recipe.needRare2]
-            .filter(Boolean)
-            .map((r) => itemName(r as string, cfg))
-            .join('·');
-          if (miss) parts.push(chip('缺', miss, 'warn'));
+      if (recipe) {
+        const demand = getDemand(cfg);
+        const need1 = recipe.needItem1Num || 1;
+        const need2 = recipe.needItem2Num || 1;
+        const have1 = recipe.needItem1 ? ownedCount(state, recipe.needItem1) : Infinity;
+        const have2 = recipe.needItem2 ? ownedCount(state, recipe.needItem2) : Infinity;
+        const rareHave = recipe.needRare ? ownedCount(state, recipe.needRare) : Infinity;
+        const buyMat = recipe.needItem1 ? Math.max(0, need1 - have1) : 0;
+        const buyMat2 = recipe.needItem2 ? Math.max(0, need2 - have2) : 0;
+        const priceMat = recipe.needItem1 ? buyPrice(cfg, demand, task.cityTag, recipe.needItem1) : 0;
+        const priceMat2 = recipe.needItem2 ? buyPrice(cfg, demand, task.cityTag, recipe.needItem2) : 0;
+        // 主料能买就买（自身全有或全无）；额外料独立判断，买不起则跳过 bonus、不拦工
+        const baseCraftable = rareHave >= 1; // 主稀齐备（稀有不可买，缺=真卡点）
+        const costMat = buyMat > 0 && priceMat > 0 ? buyMat * priceMat : 0;
+        const costMat2 = buyMat2 > 0 && priceMat2 > 0 ? buyMat2 * priceMat2 : 0;
+        const buyMain = baseCraftable && costMat > 0 && state.money >= costMat;
+        const matSecured = have1 >= need1 || buyMain;
+        const buyExtra = matSecured && costMat2 > 0 && state.money >= costMat2;
+        const goldCost = (buyMain ? costMat : 0) + (buyExtra ? costMat2 : 0);
+        const craftWillHappen = baseCraftable && matSecured;
+        // 门槛层：图纸
+        if (recipe.needBlueprint) {
+          const hasBp = state.blueprints.includes(recipe.needBlueprint);
+          parts.push(chip('图纸', hasBp ? '✔' : '缺图', hasBp ? 'ok' : 'warn'));
         }
+        // 门槛层：基础主料（缺则零产出 → warn 红；金币够买主料 → 补 ok 绿）
+        if (recipe.needItem1) {
+          const name = itemName(recipe.needItem1, cfg);
+          if (have1 >= need1) parts.push(chip('主料', `${name} ×${need1} ✔`, 'ok'));
+          else if (buyMain) parts.push(chip('主料', `${name} ×${need1} 补`, 'ok'));
+          else parts.push(chip('主料', `${name} ×${need1} 缺`, 'warn'));
+        }
+        // 门槛层：基础稀有（缺则零产出 → warn 红；稀有永不自动买，缺=真卡点）
+        if (recipe.needRare) {
+          const ok = rareHave >= 1;
+          parts.push(chip('主稀', `${itemName(recipe.needRare, cfg)}${ok ? ' ✔' : ' 缺'}`, ok ? 'ok' : 'warn'));
+        }
+        // 加成层：仅当任务确能造（主稀齐备 + 主料已解决）才显示，否则信息无意义
+        if (recipe.needItem2 && craftWillHappen) {
+          const name = itemName(recipe.needItem2, cfg);
+          if (have2 >= need2) parts.push(chip('额外料', `${name} ×${need2} ✔`, 'ok'));
+          else if (buyExtra) parts.push(chip('额外料', `${name} ×${need2} 补`, 'ok'));
+          else parts.push(chip('额外料', `${name} ×${need2} 缺`)); // 中性：bonus 跳过，不拦工
+        }
+        // 加成层：额外稀有（同理，主动跳过不拦工）
+        if (recipe.needRare2 && craftWillHappen) {
+          const ok = ownedCount(state, recipe.needRare2) >= 1;
+          parts.push(chip('额外稀', `${itemName(recipe.needRare2, cfg)}${ok ? ' ✔' : ' 缺'}`)); // 中性
+        }
+        // 金币消耗提示（在额外料之后；仅当本次会触发自动补货）
+        if (goldCost > 0) parts.push(`<span class="chip cost">耗金 <b>${goldCost}</b>文</span>`);
       }
     } else {
       // C 类产出三类：好感度 / 稀有 / 图纸。

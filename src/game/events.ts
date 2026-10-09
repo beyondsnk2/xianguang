@@ -22,6 +22,8 @@ export type EventKind =
   | 'event' // 随机事件（触发 / 处理 / 错过）
   | 'attr' // 四维升级
   | 'skill' // 技能升级
+  | 'class' // 职业晋阶
+  | 'standing' // 身份获得
   | 'system'; // 离线结算 / 存档 / 系统
 
 export interface GameEvent {

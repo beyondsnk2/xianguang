@@ -1,4 +1,12 @@
-import { ATTR_KEYS, ATTR_NAMES, type GameConfig, type GameState } from '../game/types';
+import { ATTR_KEYS, ATTR_NAMES, type AttrKey, type GameConfig, type GameState, type StandingDef } from '../game/types';
+import {
+  activeStandingSlots,
+  classProgress,
+  getUnlockedClasses,
+  isClassUnlocked,
+  standingReqMet,
+  totalSkillLv,
+} from '../game/classSystem';
 import { bagCapacity, bagItemCount, bagSlotsUsed, storageItemCount } from '../game/state';
 import type { CheckResult } from '../game/selfcheck';
 import { esc, fmtClock, fmtDur, itemName } from './format';
@@ -197,6 +205,7 @@ export function renderCharacter(root: HTMLElement, state: GameState, cfg: GameCo
     `<div class="kv"><span>抱负</span><select id="ambition-select" class="rel-select">${ambOpts}</select></div>` +
     `<div class="kv"><span>节奏</span><select id="pace-select" class="rel-select">${paceOpts}</select></div>` +
     `<p class="tip">抱负决定任务偏向（约 2/3 落在偏好技能线）；节奏只平移品质窗口，不影响技能偏向。二者独立，可随时改。</p>` +
+    renderClassSection(state, cfg) +
     `<h3 class="modal-sub">四维属性</h3>` +
     ATTR_KEYS.map((k) => {
       const lv = state.attrs[k];
@@ -232,6 +241,121 @@ export function renderCharacter(root: HTMLElement, state: GameState, cfg: GameCo
     `<div class="kv"><span>累计产出</span><b>${
       items.length ? items.map(([k, v]) => `${itemName(k, cfg)} ${v}`).join(' · ') : '—'
     }</b></div>`;
+}
+
+/** 职业 / 身份面板段（V6）。每 250ms 重渲染，故选择器挂在持久节点上的事件委托里。 */
+function renderClassSection(state: GameState, cfg: GameConfig): string {
+  const unlocked = getUnlockedClasses(state, cfg);
+  const unlockedSet = new Set(unlocked.map((c) => c.classType));
+  const unlockedNow = isClassUnlocked(state, cfg);
+  const slots = activeStandingSlots(state, cfg);
+
+  const classRows = cfg.classDefs
+    .map((c) => {
+      const isU = unlockedSet.has(c.classType);
+      const aff = cfg.classAffinityMap[c.classType] ?? {};
+      const affNames = Object.entries(aff)
+        .map(([sk, lv]) => `${cfg.skillByTag[sk]?.name ?? sk}${lv === 'main' ? '★' : '◐'}`)
+        .join(' ');
+      if (!isU) {
+        const cond = (c.promoteCond ?? '')
+          .split(';')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((id) => condText(cfg, id))
+          .join('，');
+        return `<div class="kv lock"><span>${c.name}</span><b class="sub">🔒 ${cond || '未配置'}</b></div>`;
+      }
+      const p = classProgress(state, cfg, c.classType);
+      const pct = p.need ? Math.min(100, (p.exp / p.need) * 100) : 100;
+      const active = state.activeClass === c.classType ? ' · <b>生效中</b>' : '';
+      return (
+        `<div class="kv"><span>${c.name}${active}</span><b>第 ${p.rank} 阶</b></div>` +
+        `<div class="bar"><i style="width:${pct}%"></i></div>` +
+        `<div class="sub">${p.need ? `${p.exp} / ${p.need} 经验` : '满阶'} · 亲密度 ${affNames || '—'}</div>`
+      );
+    })
+    .join('');
+
+  const activeOpts = unlocked.length
+    ? `<select id="class-select" class="rel-select">` +
+      `<option value="">（不选）</option>` +
+      unlocked
+        .map((c) => `<option value="${c.classType}" ${state.activeClass === c.classType ? 'selected' : ''}>${c.name}</option>`)
+        .join('') +
+      `</select>`
+    : '<span class="sub">暂无可晋身职业</span>';
+
+  const cd =
+    state.classSwitchCd && Date.now() < state.classSwitchCd
+      ? ` · 冷却 ${Math.ceil((state.classSwitchCd - Date.now()) / 1000)}s`
+      : '';
+
+  const standingRows = cfg.standingDefs.length
+    ? cfg.standingDefs
+        .map((s) => {
+          const met = standingReqMet(state, s);
+          const on = state.standingActive.includes(s.standingTag);
+          const req = standingReqText(cfg, s);
+          return `<div class="kv"><span>${s.name}</span><b class="${met ? 'ok' : 'sub'}">${on ? '✓ 已上阵' : met ? '可上阵' : '🔒 ' + req}</b></div>`;
+        })
+        .join('')
+    : '<div class="sub">暂无身份</div>';
+
+  const sysLine = unlockedNow
+    ? `已解锁（总技能 Lv ${totalSkillLv(state)}）`
+    : `未解锁 · 总技能 Lv ${totalSkillLv(state)} / ${cfg.values.classUnlockSkillLvTotal}`;
+
+  return (
+    `<h3 class="modal-sub">职业（V6）</h3>` +
+    `<div class="kv"><span>职业系统</span><b>${sysLine}</b></div>` +
+    classRows +
+    `<div class="kv"><span>生效职业</span>${activeOpts}${cd}</div>` +
+    `<p class="tip">职业解锁后，任务偏向由「生效职业的亲密度技能」决定（取代抱负）。切换有冷却。职业经验只由亲密度技能任务积累，阶数越高效果越强（粗颗粒，非平滑）。</p>` +
+    `<h3 class="modal-sub">身份（上阵位 ${slots}）</h3>` +
+    standingRows +
+    `<p class="tip">身份由职业组合晋阶解锁，不可降级；上阵交互待后续。</p>`
+  );
+}
+
+/** 晋身条件 → 人话 */
+function condText(cfg: GameConfig, id: string): string {
+  const c = cfg.classPromoteCondByTag[id];
+  if (!c) return id;
+  switch (c.type) {
+    case 'a_rep':
+      return `${cfg.skillByTag[c.target]?.name ?? c.target} 达 Lv${c.threshold}`;
+    case 'b_general':
+      return `${c.target === 'any' ? '任一武将' : GENERALS.find((g) => g.tag === c.target)?.name ?? c.target} 好感 ≥ ${c.threshold}`;
+    case 'c_standing':
+      return `获得身份「${cfg.standingByTag[c.target]?.name ?? c.target}」`;
+    case 'd_train':
+      return c.target === 'totalSkillLv'
+        ? `总技能等级 ≥ ${c.threshold}`
+        : `${ATTR_NAMES[c.target as AttrKey] ?? c.target} ≥ ${c.threshold}`;
+    default:
+      return id;
+  }
+}
+
+/** 身份需求 → 人话 */
+function standingReqText(cfg: GameConfig, s: StandingDef): string {
+  const cls = (s.reqClasses || '')
+    .split(';')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const [ct, lv] = pair.split(':');
+      return `${cfg.classByTag[ct]?.name ?? ct} ${lv}阶`;
+    })
+    .join(' + ');
+  const st = (s.reqStandings || '')
+    .split(';')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((t) => `身份「${cfg.standingByTag[t]?.name ?? t}」`)
+    .join(' + ');
+  return [cls, st].filter(Boolean).join(' + ') || '无要求';
 }
 
 export function renderRelations(root: HTMLElement, state: GameState, _cfg: GameConfig): void {

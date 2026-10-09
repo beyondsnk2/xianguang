@@ -20,10 +20,12 @@ import {
 } from './constants';
 import type { EvalResult } from './eval';
 import { addItem, consumeItem, ownedCount } from './inventory';
+import { buyPrice, getDemand } from './economy';
 import { pickOne, randFloat, rollRange, weightedPick } from './rng';
 import { emitEvent } from './events';
 import type { RewardItem } from './taskLog';
 import type { GameConfig, GameState, Task, TaskDef } from './types';
+import { affClassEffect } from './classSystem';
 
 /**
  * @returns 本次实际产出的物品列表（不记录消耗），供统计/录制用；调用顺序不受返回值影响。
@@ -38,22 +40,24 @@ export function settleOutput(
 ): RewardItem[] {
   switch (def.cls) {
     case 'A':
-      return settleGather(state, def, ev);
+      return settleGather(state, cfg, def, ev);
     case 'B':
       return settleCraft(state, cfg, def, ev, task);
     case 'C':
       return settleSocial(state, cfg, def, ev, task);
     default:
-      return settleGather(state, def, ev); // 未标类的老配置：按最朴素的「发道具」处理
+      return settleGather(state, cfg, def, ev); // 未标类的老配置：按最朴素的「发道具」处理
   }
 }
 
 /** A 给量：实际 = 保底 1× + 增量（0~1×），永不倒扣 */
-function settleGather(state: GameState, def: TaskDef, ev: EvalResult): RewardItem[] {
+function settleGather(state: GameState, cfg: GameConfig, def: TaskDef, ev: EvalResult): RewardItem[] {
   const tag = def.mainOutput || def.getItem;
   if (!tag) return [];
   const base = rollRange(state, def.getItemNum);
-  const n = Math.max(1, Math.floor(base * ev.mult));
+  // V6 职业效果：生效职业对本品亲密度技能 → 主产物加成（按阶累计乘率）
+  const mul = 1 + affClassEffect(state, cfg, def.skill, 'gatherYield');
+  const n = Math.max(1, Math.floor(base * ev.mult * mul));
   addItem(state, tag, n);
   return [{ tag, n }];
 }
@@ -84,7 +88,7 @@ function settleCraft(
     return [];
   }
 
-  const save = EFF_SAVE_AT_BEST * Math.min(1, Math.max(0, ev.mult - 1)); // evalInc 上限 1 → 省料上限 25%
+  const save = (EFF_SAVE_AT_BEST + affClassEffect(state, cfg, def.skill, 'craftSave')) * Math.min(1, Math.max(0, ev.mult - 1)); // evalInc 上限 1 → 省料上限 25% + 职业加成
   const per = (tag: string, num: number) => (tag ? Math.max(1, Math.ceil(num * (1 - save))) : 0);
   const matPer = per(recipe.needItem1, recipe.needItem1Num);
   const mat2Per = per(recipe.needItem2, recipe.needItem2Num);
@@ -92,12 +96,42 @@ function settleCraft(
   const rare2Per = recipe.needRare2 ? 1 : 0;
 
   const own = (tag: string) => (tag ? ownedCount(state, tag) : Infinity);
-  const matOwn = own(recipe.needItem1);
-  const mat2Own = own(recipe.needItem2);
+  let matOwn = own(recipe.needItem1);
+  let mat2Own = own(recipe.needItem2);
   const rareOwn = own(recipe.needRare);
   const rare2Own = own(recipe.needRare2);
   const sub = recipe.needRare ? recipe.needRare.replace(/_\d+$/, '') : '';
   const sub2 = recipe.needRare2 ? recipe.needRare2.replace(/_\d+$/, '') : '';
+
+  // ── E3 自动补货（仅材料，红线⑦ 不补稀有）──
+  // 只补 主料(needItem1) + 额外料(needItem2)；主稀/额外稀是稀有，永不自动买。
+  // 口径与面板一致：按名义每件需求算缺口与金价，买入后省料余量归背包。
+  // 主料：能买就买（自身全有或全无——金币不够买主料则照饿死）；
+  // 额外料：独立判断，仅当主料已解决(原有或已买) 且 金币够买额外料 才买，买不起则跳过 bonus、不拦工。
+  const demand = getDemand(cfg);
+  const buyMat = recipe.needItem1 ? Math.max(0, (recipe.needItem1Num || 1) - matOwn) : 0;
+  const buyMat2 = recipe.needItem2 ? Math.max(0, (recipe.needItem2Num || 1) - mat2Own) : 0;
+  const priceMat = recipe.needItem1 ? buyPrice(cfg, demand, task?.cityTag ?? '', recipe.needItem1) : 0;
+  const priceMat2 = recipe.needItem2 ? buyPrice(cfg, demand, task?.cityTag ?? '', recipe.needItem2) : 0;
+  const baseCraftable = rareOwn >= rarePer; // 主稀齐备（稀有买不到，缺则必饿死）
+  const costMat = buyMat > 0 && priceMat > 0 ? buyMat * priceMat : 0;
+  const costMat2 = buyMat2 > 0 && priceMat2 > 0 ? buyMat2 * priceMat2 : 0;
+  let goldSpent = 0;
+  // 主料：能买就买（自身全有或全无）
+  if (baseCraftable && costMat > 0 && state.money >= costMat) {
+    state.money -= costMat; addItem(state, recipe.needItem1, buyMat); goldSpent += costMat;
+    matOwn = own(recipe.needItem1); // 买入后重取库存，后续判定用新值
+  }
+  // 额外料：仅当主料已解决(原有或刚买) 且 金币够买额外料 才买；买不起→跳过 bonus，不拦工
+  const matSecured = matOwn >= matPer;
+  if (matSecured && costMat2 > 0 && state.money >= costMat2) {
+    state.money -= costMat2; addItem(state, recipe.needItem2, buyMat2); goldSpent += costMat2;
+    mat2Own = own(recipe.needItem2);
+  }
+  if (goldSpent > 0) {
+    state.stats.restockCount = (state.stats.restockCount ?? 0) + 1;
+    state.stats.moneySpent = (state.stats.moneySpent ?? 0) + goldSpent;
+  }
 
   // 缺料细分：先判是哪一类料卡住（决定缺料率的真实成因，也决定 E3 自动补货能补掉多少）
   const starve = (kind: 'mat' | 'rare', subCat: string) => {
@@ -162,7 +196,8 @@ function settleSocial(
 ): RewardItem[] {
   const out: RewardItem[] = [];
   const q = def.quality;
-  const favor = FAVOR_PER_TASK + Math.max(0, q) + ev.tier;
+  // V6 职业效果：生效职业对本品亲密度技能 → 好感加成（按阶累计乘率）
+  const favor = (FAVOR_PER_TASK + Math.max(0, q) + ev.tier) * (1 + affClassEffect(state, cfg, def.skill, 'socialFavor'));
   state.favor += favor;
 
   if (q >= RARE_MIN_QUALITY) {
