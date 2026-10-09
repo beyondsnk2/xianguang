@@ -212,10 +212,12 @@ function pickTaskDef(state: GameState, cfg: GameConfig, idx: TaskIndex): TaskDef
   }
 
   // C 类最小品质门槛（V7）：q1-3 的 C 不进随机池——低品质 C 奖励空间空，属前期信息噪点。
-  // 过滤后为空（如技能尚在低 tier、窗口仍 1-3）则该技能本期无 C 候选，不回退到 q<4。
+  // ⚠ 兜底（修复死锁）：过滤后为空（技能尚 tier1、窗口 1-3 与门槛 4 无交集）→ 回退到过滤前的
+  // 窗口内候选（含 q1-3）做技能引导。否则该 C 技能永不能升级 → 窗口永远 1-3 → Q4 C 也刷不出（死锁）。
+  // tier2 起窗口含 q4，ok 非空，V7 规则自动恢复，不再触发兜底。
   if (candidates.length && candidates[0].cls === 'C') {
     const ok = candidates.filter((t) => t.quality >= C_MIN_QUALITY);
-    candidates = ok;
+    candidates = ok.length ? ok : inWindow;
   }
 
   if (candidates.length === 1) return candidates[0];

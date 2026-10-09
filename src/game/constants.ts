@@ -131,22 +131,47 @@ export function rareCountByEval(tier: number): number {
  */
 export const EXTRA_BONUS_RATIO = 1.0;
 /**
- * 图纸（蓝图）产出【正式规则】：
- *   门槛（全部满足才「可能」产出）：① 任务品质 q ≥ BLUEPRINT_MIN_QUALITY(4)；
- *                                ② 累计好感 state.favor ≥ BLUEPRINT_MIN_FAVOR(30)；
- *                                ③ 该 C 技能尚有玩家「未拥有」的图纸（fromSkill 匹配且不在 state.blueprints）。
- *   概率：满足门槛且**本次结算评价 ≥ BLUEPRINT_MIN_EVAL_TIER(佳)** 时，较大概率（一次性）习得一张未拥有的图纸；
- *        评价不足则不产出（评价在结算时判定，故任务板只能在门槛满足时提示"有机会"，不承诺必得）。
- *   一次性：每张图纸仅能习得一次（state.blueprints 永久记录），某技能图纸全部习得后该技能不再产出图纸。
+ * 图纸（蓝图）产出【现行规则 · V5 节点制】：
+ *   不再「每次达标随机掉 1 张」，改为按 **BLUEPRINT_NODES 节点**逐个解锁（见下方）。
+ *   结算条件（produce.ts::settleSocial）：该 C 任务 q ≥ BLUEPRINT_MIN_QUALITY(4)
+ *   ∧ 本次评价 ≥ BLUEPRINT_MIN_EVAL_TIER(佳) ⇒ 推进该技能**下一个已达标节点**，
+ *   一次性授予该节点 count 张未拥有图纸。
+ *   节点是否达标 = 全局好感 state.favor ≥ node.minFavor ∧ 该 C 技能 tier ≥ node.minCTier。
+ *
+ *   ⚠ 历史上的 ②「累计好感 ≥ BLUEPRINT_MIN_FAVOR(30) 即随机掉」已废弃：改节点制后
+ *   任何仍引用旧门槛的代码都会恒真（实测全局好感第二天就破千，远超 30），
+ *   造成 UI 提示与实际发放不一致。旧常量已删除，别再补回来。
+ *
+ *   一次性：每张图纸仅能习得一次（state.blueprints 永久记录），某技能图纸全部习得后不再产出。
  *   门槛下移说明（V5）：制造侧 q1-3 天生会、q4 起全部需要图纸；若掉落仍从 q7 起，中段玩家会长期无图可造（实现边界①），故品质门槛下移到 4。
  */
 export const BLUEPRINT_MIN_QUALITY = 4;
 export const BLUEPRINT_MIN_EVAL_TIER = 2;
-export const BLUEPRINT_MIN_FAVOR = 30;
 /** 名品：上品 C 任务的小概率产出（对应 3 件名品） */
 export const MINGQI_MIN_QUALITY = 7;
 export const MINGQI_MIN_EVAL_TIER = 2;
 export const MINGQI_CHANCE = 0.05;
+
+/**
+ * 图纸节点（V5 图纸解锁节奏，取代原「每次达标随机掉 1 张」）。
+ * 每 C 技能 8 张蓝图，按「全局好感(state.favor) × C 技能 tier」分 6 节点解锁，
+ * 避免 q4+ C 任务洪泛掉光 24 张、B 制造瞬间全开、稀有经济被抽空。
+ * 阈值刻意对齐关系阶段（30 初识后 / 80 友善=收录门 / 240 莫逆 / 640 知己），
+ * 让图纸随关系深化而解锁（叙事闭环）。count 合计须 = 每技能蓝图数（当前 8）。
+ */
+export interface BlueprintNode {
+  minFavor: number;
+  minCTier: number;
+  count: number;
+}
+export const BLUEPRINT_NODES: BlueprintNode[] = [
+  { minFavor: 30, minCTier: 2, count: 1 },
+  { minFavor: 80, minCTier: 3, count: 1 },
+  { minFavor: 150, minCTier: 4, count: 1 },
+  { minFavor: 240, minCTier: 5, count: 1 },
+  { minFavor: 400, minCTier: 6, count: 2 },
+  { minFavor: 640, minCTier: 7, count: 2 },
+];
 
 // ── 随机事件（内容设计 §三/§七 已定决议） ──
 /**

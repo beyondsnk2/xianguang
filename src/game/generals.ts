@@ -75,9 +75,10 @@ export const REL_STAGES: RelStage[] = [
   { name: '素未谋面', min: 0 },
   { name: '初识', min: 1 },
   { name: '相识', min: 20 },
-  { name: '友善', min: 50 },
-  { name: '莫逆', min: 90 },
-  { name: '知己', min: 140 },
+  { name: '友善', min: 80 },
+  { name: '莫逆', min: 240 },
+  { name: '知己', min: 640 },
+  { name: '刎颈', min: 1600 },
 ];
 
 export interface RelStageInfo {

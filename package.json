@@ -15,6 +15,10 @@
     "check:v2": "npm run _bundle && node node_modules/.sanwalk/check.cjs firstShow@2",
     "_bundle:calib": "esbuild tools/calib.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/calib.cjs --log-level=warning",
     "calib": "npm run _bundle:calib && node node_modules/.sanwalk/calib.cjs",
+    "_bundle:roster": "esbuild tools/simRoster.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/roster.cjs --log-level=warning",
+    "roster": "npm run _bundle:roster && node node_modules/.sanwalk/roster.cjs",
+    "_bundle:vbp": "esbuild tools/validate_blueprints.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/vbp.cjs --log-level=warning",
+    "vbp": "npm run _bundle:vbp && node node_modules/.sanwalk/vbp.cjs",
     "_bundle:sim": "esbuild tools/simulate100.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/sim.cjs --log-level=warning",
     "sim": "npm run _bundle:sim && node node_modules/.sanwalk/sim.cjs"
   },

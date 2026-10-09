@@ -497,6 +497,8 @@ export interface GameState {
   standingActive: string[];
   /** 已解锁图纸 tag（一次性解锁，永久有效） */
   blueprints: string[];
+  /** 图纸节点解锁进度：每 C 技能已解锁到第几节点（BLUEPRINT_NODES 下标，0=未解锁） */
+  blueprintNode: Record<string, number>;
 
   stats: GameStats;
   log: LogEntry[];

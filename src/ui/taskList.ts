@@ -2,9 +2,10 @@ import { type Cell, type GameConfig, type GameState, type TaskDef, type Task } f
 import { pathToNode } from '../game/graph';
 import type { Graph } from '../game/graph';
 import { fmtDur, itemName } from './format';
-import { BLUEPRINT_MIN_FAVOR, BLUEPRINT_MIN_QUALITY, rareCountByEval } from '../game/constants';
+import { BLUEPRINT_MIN_QUALITY, BLUEPRINT_NODES, rareCountByEval } from '../game/constants';
 import { ownedCount } from '../game/inventory';
 import { buyPrice, getDemand } from '../game/economy';
+import { skillTier } from '../game/skill';
 
 export interface BoardCallbacks {
   /** 把第 from 个槽的任务移动到第 to 个位置 */
@@ -232,13 +233,22 @@ export class TaskBoard {
         const hi = rareCountByEval(3);
         parts.push(chip('稀有', `${itemName(task.rareTag, cfg)} ×${lo}~${hi}`));
       }
-      // 图纸门槛（与 produce.ts settleSocial 一致）：q≥4 ∧ favor≥30 ∧ 该技能有未拥有图纸。
-      // 评价≥佳 在结算时才知，故此处不判，仅表示"有机会"。
-      if (def.quality >= BLUEPRINT_MIN_QUALITY && state.favor >= BLUEPRINT_MIN_FAVOR) {
-        const hasUnowned = cfg.blueprints.some(
-          (b) => b.fromSkill === def.skill && !state.blueprints.includes(b.tag),
-        );
-        if (hasUnowned) parts.push(chip('图纸', undefined, 'ok'));
+      // 图纸门槛（**必须与 produce.ts settleSocial 同源**：节点制，不是「好感≥30 随机掉」）。
+      // 判定：该 C 技能的**下一个节点**已满足「全局好感 × C 技能 tier」⇒ 若本次结算评价≥佳即可解锁。
+      // 注意不要用旧的 `state.favor >= BLUEPRINT_MIN_FAVOR`：改节点制后那会把提示恒亮
+      // （全局好感两天就破千，远超 30），与真实发放条件严重不符。
+      // 评价≥佳 在结算时才知，故此处仍只表示"有机会"，不承诺必得。
+      const nextNodeIdx = state.blueprintNode[def.skill] ?? 0;
+      const nextNode = BLUEPRINT_NODES[nextNodeIdx];
+      if (nextNode && def.quality >= BLUEPRINT_MIN_QUALITY) {
+        const cv = state.skills[def.skill];
+        const ctier = cv ? skillTier(cv.lv) : 1;
+        if (state.favor >= nextNode.minFavor && ctier >= nextNode.minCTier) {
+          const hasUnowned = cfg.blueprints.some(
+            (b) => b.fromSkill === def.skill && !state.blueprints.includes(b.tag),
+          );
+          if (hasUnowned) parts.push(chip('图纸', undefined, 'ok'));
+        }
       }
     }
     return parts.join('');

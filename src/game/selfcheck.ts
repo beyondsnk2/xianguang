@@ -160,6 +160,8 @@ export interface SimResult {
   clsTally: Record<string, number>;
   favor: number;
   blueprints: string[];
+  /** 图纸节点解锁进度：每 C 技能已解锁到第几节点（BLUEPRINT_NODES 下标，0=未解锁） */
+  blueprintNode: Record<string, number>;
   /** B 类缺料未完成次数 */
   starvedTasks: number;
   /** 缺料细分：材料不足 */
@@ -255,6 +257,7 @@ export function simulate(
     clsTally: { ...state.stats.clsTally },
     favor: state.favor,
     blueprints: [...state.blueprints],
+    blueprintNode: { ...state.blueprintNode },
     starvedTasks: state.stats.starvedTasks,
     starvedMat: state.stats.starvedMat ?? 0,
     starvedRare: state.stats.starvedRare ?? 0,
@@ -281,7 +284,7 @@ export function simulate(
  * 模拟器代玩家把容器里的事件逐条点掉（多选项随机取一个，与真人决策同分布）。
  * 这是「玩家每次都及时点击」的上界；真实玩家会漏掉一部分（TTL 4h 后过期，不给奖励）。
  */
-function autoResolveEvents(state: GameState, cfg: GameConfig): void {
+export function autoResolveEvents(state: GameState, cfg: GameConfig): void {
   let guard = 0;
   while (state.pending.length && guard++ < 50) {
     const p = state.pending[0];

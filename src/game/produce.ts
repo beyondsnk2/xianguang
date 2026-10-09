@@ -6,8 +6,8 @@
  */
 import {
   BLUEPRINT_MIN_EVAL_TIER,
-  BLUEPRINT_MIN_FAVOR,
   BLUEPRINT_MIN_QUALITY,
+  BLUEPRINT_NODES,
   EFF_SAVE_AT_BEST,
   EXTRA_BONUS_RATIO,
   FAVOR_PER_TASK,
@@ -21,11 +21,12 @@ import {
 import type { EvalResult } from './eval';
 import { addItem, consumeItem, ownedCount } from './inventory';
 import { buyPrice, getDemand } from './economy';
-import { pickOne, randFloat, rollRange, weightedPick } from './rng';
+import { randFloat, rollRange, weightedPick } from './rng';
 import { emitEvent } from './events';
 import type { RewardItem } from './taskLog';
 import type { GameConfig, GameState, Task, TaskDef } from './types';
 import { affClassEffect } from './classSystem';
+import { skillTier } from './skill';
 
 /**
  * @returns 本次实际产出的物品列表（不记录消耗），供统计/录制用；调用顺序不受返回值影响。
@@ -233,14 +234,26 @@ function settleSocial(
   }
 
   // V5 边界①：q4 起制造就要图纸，故图纸掉落门槛同步下移到 q≥4（原 q≥7 会让中段长期空转）。
-  // 每 C 技能持有 8 张图 → 从未拥有的里面随机发一张，而不是固定发第一张。
-  if (q >= BLUEPRINT_MIN_QUALITY && ev.tier >= BLUEPRINT_MIN_EVAL_TIER && state.favor >= BLUEPRINT_MIN_FAVOR) {
-    const owned = new Set(state.blueprints);
-    const pool = cfg.blueprints.filter((b) => b.fromSkill === def.skill && !owned.has(b.tag));
-    const bp = pool.length ? pickOne(state, pool) : null;
-    if (bp) {
-      state.blueprints.push(bp.tag);
-      emitEvent(state, `习得图纸「${bp.name}」`, 1, 'blueprint');
+  // 图纸节点解锁（取代原随机掉）：每 C 技能 8 张，按「全局好感 × C 技能 tier」分 6 节点
+  // （BLUEPRINT_NODES）。仅在 q≥4 ∧ 评价≥佳 的 C 任务上推进该技能的下一节点，
+  // 一次性授予该节点的 count 张（稳定顺序），避免洪泛掉光、B 制造瞬间全开。
+  if (q >= BLUEPRINT_MIN_QUALITY && ev.tier >= BLUEPRINT_MIN_EVAL_TIER) {
+    const cv = state.skills[def.skill];
+    const ctier = cv ? skillTier(cv.lv) : 1;
+    let unlocked = state.blueprintNode[def.skill] ?? 0;
+    while (unlocked < BLUEPRINT_NODES.length) {
+      const node = BLUEPRINT_NODES[unlocked];
+      if (state.favor < node.minFavor || ctier < node.minCTier) break;
+      const owned = new Set(state.blueprints);
+      const pool = cfg.blueprints
+        .filter((b) => b.fromSkill === def.skill && !owned.has(b.tag))
+        .sort((a, b) => a.tag.localeCompare(b.tag));
+      for (const bp of pool.slice(0, node.count)) {
+        state.blueprints.push(bp.tag);
+        emitEvent(state, `习得图纸「${bp.name}」`, 1, 'blueprint');
+      }
+      unlocked += 1;
+      state.blueprintNode[def.skill] = unlocked;
     }
   }
   return out;

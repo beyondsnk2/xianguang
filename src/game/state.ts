@@ -49,6 +49,7 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
     classSwitchCd: null,
     standingActive: [],
     blueprints: [],
+    blueprintNode: {},
     events: [],
     nextEventSeq: 1,
     pending: [],
@@ -123,6 +124,7 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
 export function ensureRuntimeFields(state: GameState, cfg: GameConfig): void {
   ensureSkills(state, cfg);
   if (!Array.isArray(state.blueprints)) state.blueprints = [];
+  if (!state.blueprintNode || typeof state.blueprintNode !== 'object') state.blueprintNode = {};
   if (typeof state.favor !== 'number' || !Number.isFinite(state.favor)) state.favor = 0;
   ensureRelations(state);
   if (state.ambition !== 'free' && state.ambition !== 'wen' && state.ambition !== 'wu' && state.ambition !== 'zong' && state.ambition !== 'fang') {

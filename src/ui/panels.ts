@@ -9,7 +9,7 @@ import {
 } from '../game/classSystem';
 import { bagCapacity, bagItemCount, bagSlotsUsed, storageItemCount } from '../game/state';
 import type { CheckResult } from '../game/selfcheck';
-import { esc, fmtClock, fmtDur, itemName } from './format';
+import { esc, fmtClock, fmtDur, fmtInt, itemName } from './format';
 import {
   GENERALS,
   REL_STAGES,
@@ -175,7 +175,7 @@ export function renderAttrs(root: HTMLElement, state: GameState, cfg: GameConfig
       `<div class="attr">` +
       `<div class="attr-head"><span>${ATTR_NAMES[k]}</span><b>Lv ${lv}</b></div>` +
       `<div class="bar"><i style="width:${pct}%"></i></div>` +
-      `<div class="sub">${need ? `${state.attrXp[k]} / ${need} 经验` : '已满级'}</div>` +
+      `<div class="sub">${need ? `${fmtInt(state.attrXp[k])} / ${need} 经验` : '已满级'}</div>` +
       `</div>`
     );
   }).join('');
@@ -215,7 +215,7 @@ export function renderCharacter(root: HTMLElement, state: GameState, cfg: GameCo
         `<div class="attr">` +
         `<div class="attr-head"><span>${ATTR_NAMES[k]}</span><b>Lv ${lv}</b></div>` +
         `<div class="bar"><i style="width:${pct}%"></i></div>` +
-        `<div class="sub">${need ? `${state.attrXp[k]} / ${need} 经验` : '已满级'}</div>` +
+        `<div class="sub">${need ? `${fmtInt(state.attrXp[k])} / ${need} 经验` : '已满级'}</div>` +
         `</div>`
       );
     }).join('') +
@@ -229,7 +229,7 @@ export function renderCharacter(root: HTMLElement, state: GameState, cfg: GameCo
           `<div class="attr">` +
           `<div class="attr-head"><span>${s.name}</span><b>Lv ${sp.lv}</b></div>` +
           `<div class="bar"><i style="width:${pct}%"></i></div>` +
-          `<div class="sub">${need ? `${sp.xp} / ${need} 经验 · ${s.nodeName}` : '已满级 · ' + s.nodeName}</div>` +
+          `<div class="sub">${need ? `${fmtInt(sp.xp)} / ${need} 经验 · ${s.nodeName}` : '已满级 · ' + s.nodeName}</div>` +
           `</div>`
         );
       })
@@ -272,7 +272,7 @@ function renderClassSection(state: GameState, cfg: GameConfig): string {
       return (
         `<div class="kv"><span>${c.name}${active}</span><b>第 ${p.rank} 阶</b></div>` +
         `<div class="bar"><i style="width:${pct}%"></i></div>` +
-        `<div class="sub">${p.need ? `${p.exp} / ${p.need} 经验` : '满阶'} · 亲密度 ${affNames || '—'}</div>`
+        `<div class="sub">${p.need ? `${fmtInt(p.exp)} / ${p.need} 经验` : '满阶'} · 亲密度 ${affNames || '—'}</div>`
       );
     })
     .join('');
@@ -402,7 +402,9 @@ export function renderRelations(root: HTMLElement, state: GameState, _cfg: GameC
       `</div>` +
       `<div class="rel-pref">主 ${prefMain} · 次 ${prefSub}</div>` +
       `<div class="bar"><i style="width:${pct}%"></i></div>` +
-      `<div class="sub">好感 ${v.toFixed(1)} · ${nextText}</div>` +
+      // 显示层取整：武将好感底层是浮点（propagateDeed 累加 +1.2/+0.5，会出现 134.50000000000014），
+      // UI 一律显整数；门槛/阶段判定仍用原始浮点值，不受影响。
+      `<div class="sub">好感 ${fmtInt(v)} · ${nextText}</div>` +
       `<div class="rel-act">${btn}</div>` +
       `</div>`
     );
