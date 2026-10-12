@@ -20,7 +20,11 @@
     "_bundle:vbp": "esbuild tools/validate_blueprints.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/vbp.cjs --log-level=warning",
     "vbp": "npm run _bundle:vbp && node node_modules/.sanwalk/vbp.cjs",
     "_bundle:sim": "esbuild tools/simulate100.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/sim.cjs --log-level=warning",
-    "sim": "npm run _bundle:sim && node node_modules/.sanwalk/sim.cjs"
+    "sim": "npm run _bundle:sim && node node_modules/.sanwalk/sim.cjs",
+    "_bundle:point": "esbuild tools/checkPoint.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/point.cjs --log-level=warning",
+    "check:point": "npm run _bundle:point && node node_modules/.sanwalk/point.cjs",
+    "_bundle:gen": "esbuild tools/genPointMap.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/gen.cjs --log-level=warning",
+    "gen:pointmap": "npm run _bundle:gen && node node_modules/.sanwalk/gen.cjs gen"
   },
   "dependencies": {
     "sanwalk": "file:",

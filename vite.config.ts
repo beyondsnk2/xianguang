@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generatePointMap } from './tools/genPointMap';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_DIR = path.join(ROOT, 'config');
@@ -93,6 +94,16 @@ function configPlugin(): Plugin {
 
   return {
     name: 'sanwalk-config',
+    // 每次 dev/build 启动都按当前 xlsx 重新派生 config/point-map.json，
+    // 使 ?pointmap=1 永远与 xlsx 同步（xlsx 为唯一真相）。失败仅告警、不阻塞启动。
+    buildStart() {
+      try {
+        generatePointMap({ configDir: CONFIG_DIR });
+        console.log('[pointmap] 已从 xlsx 重新生成 config/point-map.json');
+      } catch (e) {
+        console.warn('[pointmap] 点地图重新生成失败（将沿用已有 point-map.json）：', (e as Error).message);
+      }
+    },
     configureServer(server) {
       server.middlewares.use('/config', (req, res) => {
         const url = decodeURIComponent((req.url || '/').split('?')[0]);
@@ -104,6 +115,11 @@ function configPlugin(): Plugin {
         const name = path.basename(url);
         const hit = files.find((f) => f.name === name);
         if (!hit) {
+          // 非 xlsx 文件：放行 config/ 下的 .json（如坐标点地图 point-map.json），其余 404
+          if (name.endsWith('.json') && fs.existsSync(path.join(CONFIG_DIR, name))) {
+            send(res, 200, fs.readFileSync(path.join(CONFIG_DIR, name)), 'application/json; charset=utf-8');
+            return;
+          }
           send(res, 404, JSON.stringify({ error: `config/${name} 不可用` }), 'application/json; charset=utf-8');
           return;
         }
@@ -133,6 +149,11 @@ function configPlugin(): Plugin {
         fileName: 'config/manifest.json',
         source: JSON.stringify({ dir: 'config', latest, files }),
       });
+      // 构建期一并产出 config/ 下的坐标点地图 JSON（与 xlsx 同命名空间，dev 由中间件直读）
+      const pmJson = path.join(CONFIG_DIR, 'point-map.json');
+      if (fs.existsSync(pmJson)) {
+        this.emitFile({ type: 'asset', fileName: 'config/point-map.json', source: fs.readFileSync(pmJson) });
+      }
     },
   };
 }
@@ -140,5 +161,9 @@ function configPlugin(): Plugin {
 export default defineConfig({
   plugins: [configPlugin()],
   server: { port: 5173, open: false },
-  build: { target: 'es2022', chunkSizeWarningLimit: 1500 },
+  build: {
+    target: 'es2022',
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: { input: { main: 'index.html', editor: 'editor.html' } },
+  },
 });

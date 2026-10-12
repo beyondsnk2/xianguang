@@ -48,5 +48,8 @@ export async function loadGameConfig(base = ''): Promise<LoadedConfig> {
     version: target.version,
     loadedAt: new Date().toISOString(),
   });
+
+  // 坐标模式：xlsx 即唯一真相，parse.ts 已直出向量层（cityPoints/roadLines/mapBounds），
+  // 不再由 ?pointmap 叠加点地图 JSON。point-map.json 仅作为构建期派生校验产物。
   return { config, warnings, manifest };
 }

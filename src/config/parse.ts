@@ -5,7 +5,6 @@ import {
   type AttrKey,
   type AttrLvRow,
   type BlueprintDef,
-  type Cell,
   type CityDef,
   type CityLinkDef,
   type ConfigMeta,
@@ -13,6 +12,11 @@ import {
   type ItemDef,
   type MapNodeDef,
   type MapRoadDef,
+  type CityPoint,
+  type Waypoint,
+  type RoadLine,
+  type MapBounds,
+  type RegionDef,
   type PriceRow,
   type Range,
   type RecipeDef,
@@ -73,37 +77,6 @@ function parseEvalInc(v: CellVal): number[] {
 /** 'jingtie_4' → 'jingtie'（取物品品质子族） */
 function subOf(tag: string): string {
   return tag.replace(/_\d+$/, '');
-}
-
-/** '8:9' → {x:8,y:9} */
-function parseCell(s: string): Cell | null {
-  const m = /^(-?\d+)\s*[:：]\s*(-?\d+)$/.exec(s.trim());
-  if (!m) return null;
-  return { x: Number(m[1]), y: Number(m[2]) };
-}
-
-/**
- * position 解析：
- *  - '8:9'        → 1 格
- *  - '10:10;11:11' → 矩形对角（左上 + 右下）→ 展开为 2×2 = 4 格
- */
-function parseCells(v: CellVal): Cell[] {
-  const parts = splitList(v);
-  if (parts.length === 1) {
-    const c = parseCell(parts[0]);
-    return c ? [c] : [];
-  }
-  const corners = parts.map(parseCell);
-  if (corners.length < 2 || corners.some((c) => !c)) return [];
-  const a = corners[0] as Cell;
-  const b = corners[corners.length - 1] as Cell;
-  const x1 = Math.min(a.x, b.x);
-  const x2 = Math.max(a.x, b.x);
-  const y1 = Math.min(a.y, b.y);
-  const y2 = Math.max(a.y, b.y);
-  const out: Cell[] = [];
-  for (let y = y1; y <= y2; y++) for (let x = x1; x <= x2; x++) out.push({ x, y });
-  return out;
 }
 
 // ───────────────────────── 表解析规则 ─────────────────────────
@@ -201,42 +174,67 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     subOutput: asStr(r['subOutput']),
   })).filter((t) => t.tag);
 
-  // city
-  const cities: CityDef[] = (tables['city'] ?? []).map((r) => ({
-    tag: asStr(r['tag']),
-    name: asStr(r['name']),
-    taskTypes: splitList(r['taskType']),
-    state: asStr(r['state']) || null,
-  })).filter((c) => c.tag);
+  // 点位表：新表名 mapPoint（含 type 列：city/waypoint）或旧表名 city（默认 city）。
+  // 统一读入后按 type 分流为城市（CityDef + CityPoint）与拐点（Waypoint），两者同命名空间。
+  const pointRows = tables['mapPoint'] ?? tables['city'] ?? [];
+  const cities: CityDef[] = [];
+  const cityPoints: CityPoint[] = [];
+  const cityPointByTag: Record<string, CityPoint> = {};
+  const waypoints: Waypoint[] = [];
+  for (const r of pointRows) {
+    const tag = asStr(r['tag']);
+    const name = asStr(r['name']);
+    const x = asNum(r['x'], NaN);
+    const y = asNum(r['y'], NaN);
+    if (!tag || !name || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const type = asStr(r['type']) || 'city'; // 旧 city 表无 type 列 → 默认 city
+    if (type === 'waypoint') {
+      waypoints.push({ id: tag, tag, name, x, y });
+    } else {
+      const state = asStr(r['state']) || null;
+      const taskTypes = splitList(r['taskType']);
+      cities.push({ tag, name, x, y, taskTypes, state });
+      const cp: CityPoint = { tag, name, x, y, state, taskTypes };
+      cityPoints.push(cp);
+      cityPointByTag[tag] = cp;
+    }
+  }
 
-  // state（V3 起：州定义 + 城块色；旧配置无此表 → 空数组）
+  // state（仅地理分组 + 着色标签，不进玩法逻辑）
   const states: StateDef[] = (tables['state'] ?? [])
     .map((r) => ({ tag: asStr(r['tag']), name: asStr(r['name']), color: asStr(r['color']) }))
     .filter((s) => s.tag && /^#[0-9a-fA-F]{6}$/.test(s.color));
   const stateByTag: Record<string, StateDef> = {};
   for (const s of states) stateByTag[s.tag] = s;
-  for (const c of cities) {
-    if (c.state && !stateByTag[c.state]) warnings.push(`city ${c.tag} 的 state=${c.state} 不存在于 state 表`);
-  }
 
-  // mapNode
-  const nodes: MapNodeDef[] = (tables['mapNode'] ?? []).map((r) => ({
-    tag: asNum(r['tag'], NaN),
-    name: asStr(r['name']),
-    cells: parseCells(r['position']),
-    belong: asStr(r['belong']) || null,
-  })).filter((n) => Number.isFinite(n.tag) && n.cells.length > 0);
+  // 全点位索引（城市 + 拐点，同命名空间），供连线端点校验与连通性判定
+  const pointByTag: Record<string, { tag: string; x: number; y: number }> = {};
+  for (const c of cities) pointByTag[c.tag] = c;
+  for (const w of waypoints) pointByTag[w.tag] = w;
 
-  // mapRoad
-  const roads: MapRoadDef[] = (tables['mapRoad'] ?? []).map((r) => {
-    const cells = parseCells(r['position']);
-    return {
-      tag: asNum(r['tag'], NaN),
-      name: asStr(r['name']) || 'road',
-      cell: cells[0] ?? { x: -1, y: -1 },
-      roadType: asStr(r['roadType']) || 'plain',
-    };
-  }).filter((r) => Number.isFinite(r.tag) && r.cell.x >= 0);
+  // ── 向量地图层（坐标真相，直接由点位坐标 / 连线派生，无格子栅格化）──
+  // 道路折线：新表名 mapPointLink（tagA/tagB 可引用任意点位 tag）或旧表名 cityLink
+  const roadLines: RoadLine[] = (tables['mapPointLink'] ?? tables['cityLink'] ?? [])
+    .map((r, i) => ({
+      id: `rl${i + 1}`,
+      refs: [asStr(r['tagA']), asStr(r['tagB'])] as [string, string],
+      points: [],
+    }))
+    .filter((rl) => rl.refs[0] && rl.refs[1] && rl.refs[0] !== rl.refs[1]);
+  // 坐标空间包围盒（含城市 + 拐点，外扩 pad 避免贴边）
+  const pad = 20;
+  const allX = cityPoints.map((c) => c.x);
+  const allY = cityPoints.map((c) => c.y);
+  const mapBounds: MapBounds = {
+    w: Math.max(1, ...allX.map((x) => x)) + pad,
+    h: Math.max(1, ...allY.map((y) => y)) + pad,
+  };
+  // 区域矩形：州仅为标签、不派生几何（去州化）。向量模式不再渲染州分区色块 → regions 始终为空。
+  const regions: RegionDef[] = [];
+
+  // 兼容性占位：格子 nodes/roads 不再由 xlsx 提供（配置已改为坐标真相）；保留字段以满足类型。
+  const nodes: MapNodeDef[] = [];
+  const roads: MapRoadDef[] = [];
 
   // attrLv
   const attrLv: AttrLvRow[] = (tables['attrLv'] ?? [])
@@ -252,18 +250,17 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   const cityTagOfName = (name: string): string | null =>
     cityByName[name]?.tag ?? (cityByTagEarly[name] ? name : null);
 
-  // cityLink（V3 起：城际连通 + dist；V1/V2 无此表 → 空数组）
-  const links: CityLinkDef[] = (tables['cityLink'] ?? [])
+  // 连线（连通唯一事实源）：新表名 mapPointLink（端点可引用任意点位 tag）或旧表名 cityLink；dist 运行时按坐标几何实时算
+  const links: CityLinkDef[] = (tables['mapPointLink'] ?? tables['cityLink'] ?? [])
     .map((r) => ({
       tagA: asStr(r['tagA']),
       tagB: asStr(r['tagB']),
-      dist: asNum(r['dist'], NaN),
     }))
-    .filter((l) => l.tagA && l.tagB && Number.isFinite(l.dist) && l.dist > 0);
+    .filter((l) => l.tagA && l.tagB && l.tagA !== l.tagB);
   for (const l of links) {
-    if (!cityByTagEarly[l.tagA]) warnings.push(`cityLink 的 tagA=${l.tagA} 不存在于 city 表`);
-    if (!cityByTagEarly[l.tagB]) warnings.push(`cityLink 的 tagB=${l.tagB} 不存在于 city 表`);
-    if (l.tagA === l.tagB) warnings.push(`cityLink 自环：${l.tagA}`);
+    if (!pointByTag[l.tagA]) warnings.push(`连线端点 ${l.tagA} 不存在于点位表（mapPoint）`);
+    if (!pointByTag[l.tagB]) warnings.push(`连线端点 ${l.tagB} 不存在于点位表（mapPoint）`);
+    if (l.tagA === l.tagB) warnings.push(`连线自环：${l.tagA}`);
   }
   {
     const seen = new Set<string>();
@@ -271,6 +268,33 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
       const k = l.tagA < l.tagB ? l.tagA + '|' + l.tagB : l.tagB + '|' + l.tagA;
       if (seen.has(k)) warnings.push(`cityLink 重复：${l.tagA}-${l.tagB}`);
       seen.add(k);
+    }
+  }
+  // 连通性校验：基于全点位图（城市 + 拐点），所有点位应处同一连通分量；孤立城市（无连线）单独提示。
+  {
+    const allTags = Object.keys(pointByTag);
+    if (allTags.length > 0) {
+      const adj = new Map<string, string[]>();
+      for (const t of allTags) adj.set(t, []);
+      for (const l of links) {
+        if (adj.has(l.tagA) && adj.has(l.tagB)) {
+          adj.get(l.tagA)!.push(l.tagB);
+          adj.get(l.tagB)!.push(l.tagA);
+        }
+      }
+      const isolated = cities.filter((c) => (adj.get(c.tag)?.length ?? 0) === 0).map((c) => c.tag);
+      if (isolated.length) warnings.push(`孤立城市（无任何连线）：${isolated.join(', ')}`);
+      const start = cities[0]?.tag ?? allTags[0];
+      const seenC = new Set<string>([start]);
+      const stack = [start];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        for (const nxt of adj.get(cur) ?? []) if (!seenC.has(nxt)) { seenC.add(nxt); stack.push(nxt); }
+      }
+      if (seenC.size < allTags.length) {
+        const unreached = allTags.filter((t) => !seenC.has(t)).map((t) => t);
+        warnings.push(`点位未全连通：仅 ${seenC.size}/${allTags.length} 点位可达，孤立分量含 ${unreached.join(', ')}`);
+      }
     }
   }
 
@@ -543,6 +567,13 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     states,
     stateByTag,
     mapBgImg: asStr(rawCfg['mapBgImg']) || null,
+    // 向量地图层（坐标真相）：直接由 xlsx 城市坐标 / 连线派生，不再依赖格子栅格化或 ?pointmap 叠加。
+    cityPoints,
+    cityPointByTag,
+    waypoints,
+    roadLines,
+    regions,
+    mapBounds,
     attrLv,
     attrLvNeed,
     values,
@@ -573,16 +604,16 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   // ── 校验 ──
   if (!tasks.length) warnings.push('task 表为空');
   if (!cities.length) warnings.push('city 表为空');
-  if (!nodes.length) warnings.push('mapNode 表为空');
-  if (!roads.length) warnings.push('mapRoad 表为空');
+  // 坐标模式：城市必须带坐标（无坐标则无法在地图上定位，也不参与寻路）
+  for (const c of cities) {
+    if (!Number.isFinite(c.x) || !Number.isFinite(c.y)) {
+      warnings.push(`city ${c.tag}(${c.name}) 缺少有效坐标 x/y`);
+    }
+  }
   for (const t of tasks) {
     const citiesHave = cities.filter((c) => c.taskTypes.includes(t.nodeType));
     if (citiesHave.length < 1) {
-      warnings.push(`任务 ${t.tag}(${t.name}) 的设施 ${t.nodeType} 未命中任何城市`);
-    }
-    for (const c of citiesHave) {
-      const hit = nodes.filter((n) => n.belong === c.tag && n.name === t.nodeType);
-      if (hit.length !== 1) warnings.push(`${c.name}(${c.tag}) 的 ${t.nodeType} 节点数 = ${hit.length}，预期 1`);
+      warnings.push(`任务 ${t.tag}(${t.name}) 的设施 ${t.nodeType} 未命中任何城市（坐标模式下由城市 taskType 承载）`);
     }
   }
   for (const k of ['speed', 'backPackSlotNum', 'itemStacking', 'initTaskListSlot']) {

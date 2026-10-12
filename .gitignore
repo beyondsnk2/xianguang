@@ -30,3 +30,11 @@ doc/V2 - 副本/
 .clean_done.txt
 .kill_done.txt
 .port_check.txt
+
+# 构建/调试临时产物（非工程源码）
+*_out.txt
+devcheck.txt
+esbuild*.txt
+tools/_bundle_run.cjs
+tools/_dist_probe.ts
+tools/_fixup.py

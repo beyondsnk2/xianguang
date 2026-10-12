@@ -1,0 +1,977 @@
+{
+  "meta": {
+    "name": "sanwalk 坐标点地图（42城14州，源自 firstShow_V5.xlsx）",
+    "width": 51,
+    "height": 45
+  },
+  "cities": [
+    {
+      "id": "ji",
+      "name": "蓟",
+      "x": 38.5,
+      "y": 7.5,
+      "state": "youzhou",
+      "taskTypes": [
+        "ground",
+        "hunt"
+      ]
+    },
+    {
+      "id": "beiping",
+      "name": "北平",
+      "x": 44.5,
+      "y": 5.5,
+      "state": "youzhou",
+      "taskTypes": [
+        "hunt"
+      ]
+    },
+    {
+      "id": "xiangping",
+      "name": "襄平",
+      "x": 50.5,
+      "y": 3.5,
+      "state": "youzhou",
+      "taskTypes": [
+        "hunt"
+      ]
+    },
+    {
+      "id": "jinyang",
+      "name": "晋阳",
+      "x": 26.5,
+      "y": 12.5,
+      "state": "bingzhou",
+      "taskTypes": [
+        "smith",
+        "mine"
+      ]
+    },
+    {
+      "id": "shangdang",
+      "name": "上党",
+      "x": 33.5,
+      "y": 16.5,
+      "state": "bingzhou",
+      "taskTypes": [
+        "mine"
+      ]
+    },
+    {
+      "id": "ye",
+      "name": "邺",
+      "x": 35.5,
+      "y": 13.5,
+      "state": "jizhou",
+      "taskTypes": [
+        "smith",
+        "workshop"
+      ]
+    },
+    {
+      "id": "nanpi",
+      "name": "南皮",
+      "x": 41.5,
+      "y": 9.5,
+      "state": "jizhou",
+      "taskTypes": [
+        "mine"
+      ]
+    },
+    {
+      "id": "pingyuan",
+      "name": "平原",
+      "x": 40.5,
+      "y": 13.5,
+      "state": "jizhou",
+      "taskTypes": [
+        "herb"
+      ]
+    },
+    {
+      "id": "beihai",
+      "name": "北海",
+      "x": 52.5,
+      "y": 14.5,
+      "state": "qingzhou",
+      "taskTypes": [
+        "temple"
+      ]
+    },
+    {
+      "id": "jinan",
+      "name": "济南",
+      "x": 46.5,
+      "y": 14.5,
+      "state": "qingzhou",
+      "taskTypes": [
+        "mine"
+      ]
+    },
+    {
+      "id": "luoyang",
+      "name": "洛阳",
+      "x": 29.5,
+      "y": 21.5,
+      "state": "siling",
+      "taskTypes": [
+        "workshop",
+        "embassy"
+      ]
+    },
+    {
+      "id": "henei",
+      "name": "河内",
+      "x": 28.5,
+      "y": 17.5,
+      "state": "siling",
+      "taskTypes": [
+        "herb"
+      ]
+    },
+    {
+      "id": "puyang",
+      "name": "濮阳",
+      "x": 40.5,
+      "y": 17.5,
+      "state": "yanzhou",
+      "taskTypes": [
+        "ground",
+        "tavern"
+      ]
+    },
+    {
+      "id": "chenliu",
+      "name": "陈留",
+      "x": 35.5,
+      "y": 20.5,
+      "state": "yanzhou",
+      "taskTypes": [
+        "tavern"
+      ]
+    },
+    {
+      "id": "xiaopei",
+      "name": "小沛",
+      "x": 43.5,
+      "y": 19.5,
+      "state": "xuzhou",
+      "taskTypes": [
+        "hunt"
+      ]
+    },
+    {
+      "id": "xiapi",
+      "name": "下邳",
+      "x": 46.5,
+      "y": 22.5,
+      "state": "xuzhou",
+      "taskTypes": [
+        "ground"
+      ]
+    },
+    {
+      "id": "guangling",
+      "name": "广陵",
+      "x": 50.5,
+      "y": 26.5,
+      "state": "xuzhou",
+      "taskTypes": [
+        "herb"
+      ]
+    },
+    {
+      "id": "qiao",
+      "name": "谯",
+      "x": 39.5,
+      "y": 23.5,
+      "state": "yuzhou",
+      "taskTypes": [
+        "herb"
+      ]
+    },
+    {
+      "id": "xuchang",
+      "name": "许昌",
+      "x": 32.5,
+      "y": 23.5,
+      "state": "yuzhou",
+      "taskTypes": [
+        "embassy",
+        "alchemy"
+      ]
+    },
+    {
+      "id": "runan",
+      "name": "汝南",
+      "x": 34.5,
+      "y": 27.5,
+      "state": "yuzhou",
+      "taskTypes": [
+        "hunt"
+      ]
+    },
+    {
+      "id": "changan",
+      "name": "长安",
+      "x": 24.5,
+      "y": 20.5,
+      "state": "yongzhou",
+      "taskTypes": [
+        "workshop",
+        "smith"
+      ]
+    },
+    {
+      "id": "anding",
+      "name": "安定",
+      "x": 19.5,
+      "y": 15.5,
+      "state": "yongzhou",
+      "taskTypes": [
+        "temple"
+      ]
+    },
+    {
+      "id": "tianshui",
+      "name": "天水",
+      "x": 15.5,
+      "y": 19.5,
+      "state": "yongzhou",
+      "taskTypes": [
+        "mine"
+      ]
+    },
+    {
+      "id": "wuwei",
+      "name": "武威",
+      "x": 6.5,
+      "y": 13.5,
+      "state": "liangzhou",
+      "taskTypes": [
+        "smith",
+        "tavern"
+      ]
+    },
+    {
+      "id": "xiping",
+      "name": "西平",
+      "x": 9.5,
+      "y": 18.5,
+      "state": "liangzhou",
+      "taskTypes": [
+        "smith"
+      ]
+    },
+    {
+      "id": "wan",
+      "name": "宛",
+      "x": 27.5,
+      "y": 25.5,
+      "state": "jingzhou",
+      "taskTypes": [
+        "alchemy"
+      ]
+    },
+    {
+      "id": "xinye",
+      "name": "新野",
+      "x": 31.5,
+      "y": 27.5,
+      "state": "jingzhou",
+      "taskTypes": [
+        "temple"
+      ]
+    },
+    {
+      "id": "xiangyang",
+      "name": "襄阳",
+      "x": 29.5,
+      "y": 30.5,
+      "state": "jingzhou",
+      "taskTypes": [
+        "alchemy",
+        "hut"
+      ]
+    },
+    {
+      "id": "jiangling",
+      "name": "江陵",
+      "x": 27.5,
+      "y": 34.5,
+      "state": "jingzhou",
+      "taskTypes": [
+        "alchemy"
+      ]
+    },
+    {
+      "id": "jiangxia",
+      "name": "江夏",
+      "x": 37.5,
+      "y": 31.5,
+      "state": "jingzhou",
+      "taskTypes": [
+        "smith"
+      ]
+    },
+    {
+      "id": "changsha",
+      "name": "长沙",
+      "x": 29.5,
+      "y": 38.5,
+      "state": "jingzhou",
+      "taskTypes": [
+        "mine"
+      ]
+    },
+    {
+      "id": "lujiang",
+      "name": "庐江",
+      "x": 42.5,
+      "y": 30.5,
+      "state": "yangzhou",
+      "taskTypes": [
+        "hunt"
+      ]
+    },
+    {
+      "id": "jianye",
+      "name": "建业",
+      "x": 46.5,
+      "y": 27.5,
+      "state": "yangzhou",
+      "taskTypes": [
+        "workshop",
+        "embassy"
+      ]
+    },
+    {
+      "id": "wu",
+      "name": "吴",
+      "x": 50.5,
+      "y": 30.5,
+      "state": "yangzhou",
+      "taskTypes": [
+        "herb"
+      ]
+    },
+    {
+      "id": "kuaiji",
+      "name": "会稽",
+      "x": 52.5,
+      "y": 33.5,
+      "state": "yangzhou",
+      "taskTypes": [
+        "embassy"
+      ]
+    },
+    {
+      "id": "chaisang",
+      "name": "柴桑",
+      "x": 39.5,
+      "y": 35.5,
+      "state": "yangzhou",
+      "taskTypes": [
+        "alchemy"
+      ]
+    },
+    {
+      "id": "hanzhong",
+      "name": "汉中",
+      "x": 20.5,
+      "y": 24.5,
+      "state": "yizhou",
+      "taskTypes": [
+        "temple"
+      ]
+    },
+    {
+      "id": "zitong",
+      "name": "梓潼",
+      "x": 16.5,
+      "y": 27.5,
+      "state": "yizhou",
+      "taskTypes": [
+        "workshop"
+      ]
+    },
+    {
+      "id": "chengdu",
+      "name": "成都",
+      "x": 11.5,
+      "y": 30.5,
+      "state": "yizhou",
+      "taskTypes": [
+        "alchemy",
+        "temple"
+      ]
+    },
+    {
+      "id": "jiangzhou",
+      "name": "江州",
+      "x": 18.5,
+      "y": 34.5,
+      "state": "yizhou",
+      "taskTypes": [
+        "workshop"
+      ]
+    },
+    {
+      "id": "jiaozhi",
+      "name": "交趾",
+      "x": 23.5,
+      "y": 42.5,
+      "state": "jiaozhou",
+      "taskTypes": [
+        "embassy",
+        "nanyao"
+      ]
+    },
+    {
+      "id": "nanhai",
+      "name": "南海",
+      "x": 35.5,
+      "y": 43.5,
+      "state": "jiaozhou",
+      "taskTypes": [
+        "embassy"
+      ]
+    }
+  ],
+  "states": [
+    {
+      "tag": "youzhou",
+      "name": "幽州",
+      "color": "#5B8FD6"
+    },
+    {
+      "tag": "bingzhou",
+      "name": "并州",
+      "color": "#A98BD4"
+    },
+    {
+      "tag": "jizhou",
+      "name": "冀州",
+      "color": "#DE7C7C"
+    },
+    {
+      "tag": "qingzhou",
+      "name": "青州",
+      "color": "#4FBFA6"
+    },
+    {
+      "tag": "siling",
+      "name": "司隶",
+      "color": "#E0A24F"
+    },
+    {
+      "tag": "yanzhou",
+      "name": "兖州",
+      "color": "#BCC45E"
+    },
+    {
+      "tag": "xuzhou",
+      "name": "徐州",
+      "color": "#4FB2D8"
+    },
+    {
+      "tag": "yuzhou",
+      "name": "豫州",
+      "color": "#D97FAE"
+    },
+    {
+      "tag": "yongzhou",
+      "name": "雍州",
+      "color": "#C9A45E"
+    },
+    {
+      "tag": "liangzhou",
+      "name": "凉州",
+      "color": "#9AA0AC"
+    },
+    {
+      "tag": "jingzhou",
+      "name": "荆州",
+      "color": "#7CC46E"
+    },
+    {
+      "tag": "yangzhou",
+      "name": "扬州",
+      "color": "#40BEA8"
+    },
+    {
+      "tag": "yizhou",
+      "name": "益州",
+      "color": "#DB9A62"
+    },
+    {
+      "tag": "jiaozhou",
+      "name": "交州",
+      "color": "#A6B44E"
+    }
+  ],
+  "roads": [
+    {
+      "id": "r1",
+      "pointRefs": [
+        "anding",
+        "wuwei"
+      ]
+    },
+    {
+      "id": "r2",
+      "pointRefs": [
+        "beihai",
+        "xiapi"
+      ]
+    },
+    {
+      "id": "r3",
+      "pointRefs": [
+        "beiping",
+        "ji"
+      ]
+    },
+    {
+      "id": "r4",
+      "pointRefs": [
+        "changan",
+        "anding"
+      ]
+    },
+    {
+      "id": "r5",
+      "pointRefs": [
+        "changan",
+        "hanzhong"
+      ]
+    },
+    {
+      "id": "r6",
+      "pointRefs": [
+        "changan",
+        "tianshui"
+      ]
+    },
+    {
+      "id": "r7",
+      "pointRefs": [
+        "changsha",
+        "chaisang"
+      ]
+    },
+    {
+      "id": "r8",
+      "pointRefs": [
+        "changsha",
+        "nanhai"
+      ]
+    },
+    {
+      "id": "r9",
+      "pointRefs": [
+        "chengdu",
+        "hanzhong"
+      ]
+    },
+    {
+      "id": "r10",
+      "pointRefs": [
+        "chengdu",
+        "jiangzhou"
+      ]
+    },
+    {
+      "id": "r11",
+      "pointRefs": [
+        "chenliu",
+        "xuchang"
+      ]
+    },
+    {
+      "id": "r12",
+      "pointRefs": [
+        "guangling",
+        "jianye"
+      ]
+    },
+    {
+      "id": "r13",
+      "pointRefs": [
+        "guangling",
+        "lujiang"
+      ]
+    },
+    {
+      "id": "r14",
+      "pointRefs": [
+        "hanzhong",
+        "zitong"
+      ]
+    },
+    {
+      "id": "r15",
+      "pointRefs": [
+        "henei",
+        "shangdang"
+      ]
+    },
+    {
+      "id": "r16",
+      "pointRefs": [
+        "ji",
+        "jinyang"
+      ]
+    },
+    {
+      "id": "r17",
+      "pointRefs": [
+        "ji",
+        "nanpi"
+      ]
+    },
+    {
+      "id": "r18",
+      "pointRefs": [
+        "jiangling",
+        "changsha"
+      ]
+    },
+    {
+      "id": "r19",
+      "pointRefs": [
+        "jiangling",
+        "hanzhong"
+      ]
+    },
+    {
+      "id": "r20",
+      "pointRefs": [
+        "jiangling",
+        "jiangxia"
+      ]
+    },
+    {
+      "id": "r21",
+      "pointRefs": [
+        "jiangling",
+        "jiangzhou"
+      ]
+    },
+    {
+      "id": "r22",
+      "pointRefs": [
+        "jiangxia",
+        "chaisang"
+      ]
+    },
+    {
+      "id": "r23",
+      "pointRefs": [
+        "jiangxia",
+        "changsha"
+      ]
+    },
+    {
+      "id": "r24",
+      "pointRefs": [
+        "jiangxia",
+        "lujiang"
+      ]
+    },
+    {
+      "id": "r25",
+      "pointRefs": [
+        "jiangzhou",
+        "hanzhong"
+      ]
+    },
+    {
+      "id": "r26",
+      "pointRefs": [
+        "jiangzhou",
+        "jiaozhi"
+      ]
+    },
+    {
+      "id": "r27",
+      "pointRefs": [
+        "jianye",
+        "lujiang"
+      ]
+    },
+    {
+      "id": "r28",
+      "pointRefs": [
+        "jianye",
+        "wu"
+      ]
+    },
+    {
+      "id": "r29",
+      "pointRefs": [
+        "jinan",
+        "beihai"
+      ]
+    },
+    {
+      "id": "r30",
+      "pointRefs": [
+        "jinyang",
+        "henei"
+      ]
+    },
+    {
+      "id": "r31",
+      "pointRefs": [
+        "jinyang",
+        "ye"
+      ]
+    },
+    {
+      "id": "r32",
+      "pointRefs": [
+        "kuaiji",
+        "nanhai"
+      ]
+    },
+    {
+      "id": "r33",
+      "pointRefs": [
+        "lujiang",
+        "chaisang"
+      ]
+    },
+    {
+      "id": "r34",
+      "pointRefs": [
+        "luoyang",
+        "changan"
+      ]
+    },
+    {
+      "id": "r35",
+      "pointRefs": [
+        "luoyang",
+        "chenliu"
+      ]
+    },
+    {
+      "id": "r36",
+      "pointRefs": [
+        "luoyang",
+        "henei"
+      ]
+    },
+    {
+      "id": "r37",
+      "pointRefs": [
+        "luoyang",
+        "wan"
+      ]
+    },
+    {
+      "id": "r38",
+      "pointRefs": [
+        "nanhai",
+        "jiaozhi"
+      ]
+    },
+    {
+      "id": "r39",
+      "pointRefs": [
+        "nanpi",
+        "beihai"
+      ]
+    },
+    {
+      "id": "r40",
+      "pointRefs": [
+        "nanpi",
+        "pingyuan"
+      ]
+    },
+    {
+      "id": "r41",
+      "pointRefs": [
+        "pingyuan",
+        "jinan"
+      ]
+    },
+    {
+      "id": "r42",
+      "pointRefs": [
+        "pingyuan",
+        "puyang"
+      ]
+    },
+    {
+      "id": "r43",
+      "pointRefs": [
+        "puyang",
+        "chenliu"
+      ]
+    },
+    {
+      "id": "r44",
+      "pointRefs": [
+        "puyang",
+        "xiaopei"
+      ]
+    },
+    {
+      "id": "r45",
+      "pointRefs": [
+        "runan",
+        "qiao"
+      ]
+    },
+    {
+      "id": "r46",
+      "pointRefs": [
+        "runan",
+        "xiangyang"
+      ]
+    },
+    {
+      "id": "r47",
+      "pointRefs": [
+        "shangdang",
+        "luoyang"
+      ]
+    },
+    {
+      "id": "r48",
+      "pointRefs": [
+        "shangdang",
+        "ye"
+      ]
+    },
+    {
+      "id": "r49",
+      "pointRefs": [
+        "tianshui",
+        "hanzhong"
+      ]
+    },
+    {
+      "id": "r50",
+      "pointRefs": [
+        "tianshui",
+        "wuwei"
+      ]
+    },
+    {
+      "id": "r51",
+      "pointRefs": [
+        "wu",
+        "kuaiji"
+      ]
+    },
+    {
+      "id": "r52",
+      "pointRefs": [
+        "wuwei",
+        "xiping"
+      ]
+    },
+    {
+      "id": "r53",
+      "pointRefs": [
+        "xiangping",
+        "beiping"
+      ]
+    },
+    {
+      "id": "r54",
+      "pointRefs": [
+        "xiangyang",
+        "jiangling"
+      ]
+    },
+    {
+      "id": "r55",
+      "pointRefs": [
+        "xiangyang",
+        "wan"
+      ]
+    },
+    {
+      "id": "r56",
+      "pointRefs": [
+        "xiangyang",
+        "xinye"
+      ]
+    },
+    {
+      "id": "r57",
+      "pointRefs": [
+        "xiaopei",
+        "qiao"
+      ]
+    },
+    {
+      "id": "r58",
+      "pointRefs": [
+        "xiapi",
+        "guangling"
+      ]
+    },
+    {
+      "id": "r59",
+      "pointRefs": [
+        "xiapi",
+        "xiaopei"
+      ]
+    },
+    {
+      "id": "r60",
+      "pointRefs": [
+        "xinye",
+        "wan"
+      ]
+    },
+    {
+      "id": "r61",
+      "pointRefs": [
+        "xuchang",
+        "runan"
+      ]
+    },
+    {
+      "id": "r62",
+      "pointRefs": [
+        "xuchang",
+        "wan"
+      ]
+    },
+    {
+      "id": "r63",
+      "pointRefs": [
+        "ye",
+        "nanpi"
+      ]
+    },
+    {
+      "id": "r64",
+      "pointRefs": [
+        "ye",
+        "pingyuan"
+      ]
+    },
+    {
+      "id": "r65",
+      "pointRefs": [
+        "ye",
+        "puyang"
+      ]
+    },
+    {
+      "id": "r66",
+      "pointRefs": [
+        "zitong",
+        "chengdu"
+      ]
+    }
+  ]
+}

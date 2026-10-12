@@ -28,9 +28,9 @@ export interface PickedConfigFile {
  *   - `firstShow`     → 该配置集的最大版本
  *   - `firstShow@1` / `@1` → 精确钉住某版本（@ 前留空则用默认集）
  */
-export function pickLatest(want?: string): PickedConfigFile {
+export function pickLatest(want?: string, baseDir: string = CONFIG_DIR): PickedConfigFile {
   const all: PickedConfigFile[] = [];
-  for (const name of fs.readdirSync(CONFIG_DIR)) {
+  for (const name of fs.readdirSync(baseDir)) {
     if (name.startsWith('~$') || !/\.xlsx$/i.test(name)) continue;
     const m = /^(.+)_V(\d+)\.xlsx$/i.exec(name);
     if (m) all.push({ file: name, setName: m[1], version: Number(m[2]) });
@@ -76,9 +76,9 @@ export interface LoadedConfig {
 }
 
 /** 按「最大版本」规则载入配置（不打印任何信息，打印交给调用方） */
-export function loadConfig(want?: string): LoadedConfig {
-  const picked = pickLatest(want);
-  const buf = fs.readFileSync(path.join(CONFIG_DIR, picked.file));
+export function loadConfig(want?: string, baseDir: string = CONFIG_DIR): LoadedConfig {
+  const picked = pickLatest(want, baseDir);
+  const buf = fs.readFileSync(path.join(baseDir, picked.file));
   const sheets = readXlsx(new Uint8Array(buf));
   const { config, warnings } = parseWorkbook(sheets, {
     file: picked.file,

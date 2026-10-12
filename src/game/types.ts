@@ -168,8 +168,11 @@ export interface BlueprintDef {
 export interface CityDef {
   tag: string; // shangyong …
   name: string; // 上庸
+  /** 离散坐标（坐标真相；不再基于格子）。坐标空间浮点 */
+  x: number;
+  y: number;
   taskTypes: string[]; // 该城拥有的设施类型
-  /** 所属州（state 表 tag）。V3 起渲染城块着色用；旧配置无此列时为 null */
+  /** 所属州（state 表 tag）。仅作标签，不进玩法逻辑 */
   state: string | null;
 }
 
@@ -194,11 +197,60 @@ export interface MapRoadDef {
   roadType: string; // plain（预留 mountain / forest / official）
 }
 
-/** 城际连通（cityLink 表，V3 起）：连通唯一事实源，dist=城心 Dijkstra 格距（生成器写入） */
+/** 城际连通（cityLink 表）：连通唯一事实源。dist 不再由配置写入（运行时按坐标几何实时计算） */
 export interface CityLinkDef {
   tagA: string;
   tagB: string;
-  dist: number;
+  /** 可选：生成器写入的参考距离（格/几何）；运行时以坐标几何距离为准，此字段仅作校验对照 */
+  dist?: number;
+}
+
+// ────────────────────────────── 向量地图层（V-Point：城市/区域/拐点基于离散坐标，非格子） ──────────────────────────────
+
+/** 城市离散坐标点（不再基于格子；x/y 为坐标空间浮点） */
+export interface CityPoint {
+  tag: string; // 与 CityDef.tag 同 id
+  name: string;
+  x: number;
+  y: number;
+  /** 所属州（state 表 tag） */
+  state: string | null;
+  /** 该城拥有的设施类型（与 CityDef.taskTypes 对齐） */
+  taskTypes: string[];
+}
+
+/** 拐点（纯连接节点，无设施、无州色；tag 与城市同命名空间，供 mapPointLink 引用） */
+export interface Waypoint {
+  id: string;
+  tag: string;
+  name: string;
+  x: number;
+  y: number;
+}
+
+/** 道路折线：连接两个节点（城市 tag 或拐点 id）的几何路径；points 为坐标空间折线，首末须与两端节点坐标一致 */
+export interface RoadLine {
+  id: string;
+  refs: [string, string];
+  points: Cell[];
+}
+
+/** 矩形区域（分区 / 州 / 场景范围），坐标为左上角 + 宽高（坐标空间） */
+export interface RegionDef {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** #RRGGBB 填充色（州分区用 state.color，场景区域自定义） */
+  color: string;
+}
+
+/** 向量地图逻辑尺寸（坐标空间，浮点） */
+export interface MapBounds {
+  w: number;
+  h: number;
 }
 
 export interface AttrLvRow {
@@ -314,6 +366,18 @@ export interface GameConfig {
   stateByTag: Record<string, StateDef>;
   /** config.mapBgImg：地图背景图（public/ 下文件名）；空串/null = 程序化占位底图 */
   mapBgImg: string | null;
+  // ── 向量地图层（V-Point）：城市/拐点/道路/区域基于离散坐标，非格子；缺省为空 → 走 xlsx 格子路径 ──
+  /** 城市离散坐标点（tag 与 cities 对齐） */
+  cityPoints: CityPoint[];
+  cityPointByTag: Record<string, CityPoint>;
+  /** 拐点（纯连接节点） */
+  waypoints: Waypoint[];
+  /** 道路折线（每条约等于一条「节点A→节点B」的几何路径） */
+  roadLines: RoadLine[];
+  /** 矩形区域（分区/州/场景范围） */
+  regions: RegionDef[];
+  /** 向量地图逻辑尺寸（坐标空间） */
+  mapBounds: MapBounds;
   attrLv: AttrLvRow[];
   // ── V2 新增表 ──
   skillDefs: SkillDef[];
@@ -357,7 +421,8 @@ export interface Task {
   id: number;
   taskTag: string;
   cityTag: string;
-  nodeTag: number;
+  /** 目标设施节点 tag（格子模式）；坐标模式下无独立设施节点，为 null，目标落到 cityTag 城市 */
+  nodeTag: number | null;
   needTime: number;
   /**
    * B 类专属：本次任务实际要造的成品 tag。刷出任务时就锁定

@@ -9,6 +9,8 @@ import {
 } from './constants';
 import type { Graph } from './graph';
 import { pathToNearestCity, pathToNode } from './graph';
+import type { VGraph } from './vgraph';
+import { vpathFromPoint, vpathToNearestCity } from './vgraph';
 import type { TaskIndex } from './taskGen';
 import { genTask } from './taskGen';
 import { rollRange } from './rng';
@@ -26,7 +28,10 @@ import { tierPrice } from './economy';
 
 export interface TickCtx {
   cfg: GameConfig;
-  graph: Graph;
+  /** 格子图（坐标模式下已退役，通常为空图；仅作历史兼容占位，运行时一律走 vgraph） */
+  graph?: Graph;
+  /** 向量地图图（坐标模式唯一路径，恒非空） */
+  vgraph?: VGraph | null;
   taskIndex: TaskIndex;
   /** 可选：任务明细录制器（统计用，不入存档；不传即完全旁路） */
   recorder?: TaskRecorder;
@@ -141,7 +146,31 @@ export function syncPhase(state: GameState, ctx: TickCtx): void {
   }
   const slot = state.slots[idx];
   if (slot.kind !== 'task') return;
-  const path = pathToNode(ctx.graph, state.cell, slot.task.nodeTag);
+
+  // 向量地图（?pointmap）：沿几何折线从当前坐标移动到任务所在城市；否则走格子图
+  if (ctx.vgraph) {
+    const vp = vpathFromPoint(ctx.vgraph, state.cell, slot.task.cityTag);
+    if (!vp) {
+      retireSlot(state, idx);
+      return;
+    }
+    state.currentTaskId = slot.task.id;
+    const total = vp.cost * ctx.cfg.values.speed;
+    state.phase = { kind: 'moving', taskId: slot.task.id, path: vp.points, total, remain: total };
+    return;
+  }
+
+  // 格子回退分支（坐标模式退役，ctx.graph 可能为空 → 直接出列）
+  if (!ctx.graph) {
+    retireSlot(state, idx);
+    return;
+  }
+  const nodeTag = slot.task.nodeTag;
+  if (nodeTag === null) {
+    retireSlot(state, idx);
+    return;
+  }
+  const path = pathToNode(ctx.graph, state.cell, nodeTag);
   if (!path) {
     // 不可达（配置异常）：该任务出列，空槽落到队尾重新补位
     retireSlot(state, idx);
@@ -161,7 +190,10 @@ function settlePhase(state: GameState, ctx: TickCtx): void {
     case 'moving': {
       const last = phase.path[phase.path.length - 1];
       if (last) state.cell = { ...last };
-      state.stats.cellsWalked += Math.max(0, phase.path.length - 1);
+      // 向量模式：路程以欧氏距离计；格子模式：以格数计
+      state.stats.cellsWalked += ctx.vgraph
+        ? Math.max(0, phase.total / Math.max(1e-6, ctx.cfg.values.speed))
+        : Math.max(0, phase.path.length - 1);
       const slot = state.slots.find((s) => s.kind === 'task' && s.task.id === phase.taskId);
       const task = slot && slot.kind === 'task' ? slot.task : null;
       const needTime = task ? task.needTime : 60;
@@ -304,12 +336,22 @@ function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
 
   // 超容 → 自动插入「回最近州府 → 全部入仓 → 清空背包」，全程无需点击
   if (bagSlotsUsed(state, ctx.cfg) > ctx.cfg.values.backPackSlotNum) {
-    const near = pathToNearestCity(ctx.graph, state.cell);
-    if (near) {
-      const total = near.path.cost * ctx.cfg.values.speed;
-      state.phase = { kind: 'returning', path: near.path.cells, total, remain: total };
-      pushLog(state, '背包已满，返回州府存仓');
-      return;
+    if (ctx.vgraph) {
+      const vr = vpathToNearestCity(ctx.vgraph, state.cell);
+      if (vr) {
+        const total = vr.cost * ctx.cfg.values.speed;
+        state.phase = { kind: 'returning', path: vr.points, total, remain: total };
+        pushLog(state, '背包已满，返回州府存仓');
+        return;
+      }
+    } else if (ctx.graph) {
+      const near = pathToNearestCity(ctx.graph, state.cell);
+      if (near) {
+        const total = near.path.cost * ctx.cfg.values.speed;
+        state.phase = { kind: 'returning', path: near.path.cells, total, remain: total };
+        pushLog(state, '背包已满，返回州府存仓');
+        return;
+      }
     }
   }
   syncPhase(state, ctx);

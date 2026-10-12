@@ -56,10 +56,10 @@ export function buildTaskIndex(cfg: GameConfig): TaskIndex {
     nodeByCityType.set(`${node.belong}/${node.name}`, node);
   }
 
-  /** 任务至少能被一座城市承接（城市有该设施且有对应节点） */
+  /** 任务至少能被一座城市承接（坐标模式：城市拥有该设施 taskType 即可，无独立设施节点） */
   const placeable = (t: TaskDef): boolean => {
     const cities = citiesByNodeType.get(t.nodeType) ?? [];
-    return cities.some((c) => nodeByCityType.has(`${c.tag}/${t.nodeType}`));
+    return cities.length > 0;
   };
 
   const availableTasks = cfg.tasks.filter(placeable);
@@ -126,8 +126,6 @@ export function genTask(state: GameState, cfg: GameConfig, idx: TaskIndex): Task
   const cities = idx.citiesByNodeType.get(taskDef.nodeType) ?? [];
   const city = pickOne(state, cities);
   if (!city) return null;
-  const node = idx.nodeByCityType.get(`${city.tag}/${taskDef.nodeType}`);
-  if (!node) return null;
   // B 类：刷出任务时就锁定实际制造目标（已解锁族中随机）
   const fams = taskDef.cls === 'B' ? unlockedFams(state, cfg, taskDef) : null;
   const outputTag = fams && fams.length ? `${pickOne(state, fams)}_${taskDef.quality}` : undefined;
@@ -140,11 +138,12 @@ export function genTask(state: GameState, cfg: GameConfig, idx: TaskIndex): Task
     taskDef.cls === 'C' && taskDef.quality >= RARE_MIN_QUALITY
       ? pickRareTag(state, cfg, taskDef)
       : undefined;
+  // 坐标模式：目标落到城市（cityTag），无独立设施节点（nodeTag = null）
   return {
     id: state.nextTaskId++,
     taskTag: taskDef.tag,
     cityTag: city.tag,
-    nodeTag: node.tag,
+    nodeTag: null,
     needTime: taskDef.needTime,
     outputTag,
     heroTag,

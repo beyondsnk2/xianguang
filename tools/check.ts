@@ -7,7 +7,7 @@
  * 运行：npm run check（同集最大版本，当前 V3）/ npm run check:v1（钉住 firstShow_V1）
  *       / npm run check <配置集>@<版本>（任意指定，如 firstShow@1）
  */
-import { buildGraph, nodeDistance } from '../src/game/graph';
+import { buildVGraph, vdist } from '../src/game/vgraph';
 import { offlineSettle, runSelfCheck, simulate } from '../src/game/selfcheck';
 import { AMBITION_SKILLS } from '../src/game/taskGen';
 import { buildDemand, buildSubCatFacility, cityRatio } from '../src/game/economy';
@@ -79,8 +79,8 @@ function main(): void {
     }
   }
 
-  const graph = buildGraph(config);
-  const check = runSelfCheck(config, graph);
+  const vgraph = buildVGraph(config);
+  const check = runSelfCheck(config, vgraph);
   console.log('\n── 路网对拍 ──');
   for (const it of check.items) {
     console.log(`${it.ok ? '✅' : '❌'} ${it.label}：期望 ${it.expect} / 实际 ${it.actual}`);
@@ -129,7 +129,7 @@ function main(): void {
   );
 
   console.log('\n── 24 小时节奏模拟 ──');
-  const sim = simulate(config, graph, 24);
+  const sim = simulate(config, vgraph, 24);
   console.log(`完成任务：${sim.tasksDone} 个（约 ${sim.tasksPerDay.toFixed(1)} 个/天）`);
   console.log(`单任务周期：${(sim.avgTaskCycleSec / 60).toFixed(1)} 分钟（${sim.avgTaskCycleSec.toFixed(0)} 秒）`);
   console.log(`回城次数：${sim.returnTrips} 次/天`);

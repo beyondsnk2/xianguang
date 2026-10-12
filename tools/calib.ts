@@ -5,7 +5,7 @@
  * 它是 `npm run check`（24h 快照）的补充：只看 24h 看不出「窗口何时上移」「高阶多久断供」。
  */
 import { loadConfig } from './pickConfig';
-import { buildGraph } from '../src/game/graph';
+import { buildVGraph } from '../src/game/vgraph';
 import { simulate } from '../src/game/selfcheck';
 import { skillTier, qualityWindow, qualityWeights } from '../src/game/skill';
 import { writeFileSync, mkdirSync } from 'fs';
@@ -30,7 +30,7 @@ console.log('\n天数 | 任务/天 | 技能等级 | 档位分布 | 最高品质 
 let lastStarved: Record<string, number> = {};
 let lastDemand: Record<string, number> = {};
 for (const d of days) {
-  const sim = simulate(config, graph, d * 24);
+  const sim = simulate(config, vgraph, d * 24);
   const lvs = Object.values(sim.skills).map((s) => s.lv);
   const min = Math.min(...lvs);
   const max = Math.max(...lvs);

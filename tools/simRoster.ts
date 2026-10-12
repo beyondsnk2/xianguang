@@ -11,7 +11,7 @@
  *   事件按 autoResolveEvents 自动点选（玩家每次都及时点击的上界）。
  */
 import { loadConfig } from './pickConfig';
-import { buildGraph } from '../src/game/graph';
+import { buildVGraph } from '../src/game/vgraph';
 import { buildTaskIndex } from '../src/game/taskGen';
 import { createInitialState } from '../src/game/state';
 import { tick, type TickCtx } from '../src/game/tick';
@@ -108,7 +108,7 @@ function snapshot(state: GameState, hours: number): Snap {
 function runCharacter(id: number, checkpoints: number[]): Snap[] {
   const cfg = config as GameConfig;
   const seed = 1000003 + id * 7919; // 每角色不同种子 → 独立随机轨迹
-  const ctx: TickCtx = { cfg, graph, taskIndex, online: true };
+  const ctx: TickCtx = { cfg, graph: undefined, vgraph, taskIndex, online: true };
   const state = createInitialState(cfg, Date.now(), seed);
   tick(state, 1e-9, ctx); // 触发 syncPhase：接取队首
 

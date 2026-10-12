@@ -1,0 +1,344 @@
+{
+  "meta": {
+    "name": "sanwalk 坐标点地图 Demo（10 城 · 2 拐点 · Y 形分支）",
+    "width": 2000,
+    "height": 1500,
+    "background": "",
+    "gridMaxDim": 48
+  },
+  "states": [
+    {
+      "tag": "ji",
+      "name": "冀州",
+      "color": "#6b8e9e"
+    },
+    {
+      "tag": "qing",
+      "name": "青州",
+      "color": "#8e9e6b"
+    },
+    {
+      "tag": "jing",
+      "name": "荆州",
+      "color": "#9e6b8e"
+    },
+    {
+      "tag": "yang",
+      "name": "扬州",
+      "color": "#6b9e8e"
+    }
+  ],
+  "cities": [
+    {
+      "id": "c1",
+      "name": "城1",
+      "x": 300,
+      "y": 200,
+      "state": "ji",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c2",
+      "name": "城2",
+      "x": 520,
+      "y": 180,
+      "state": "ji",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c3",
+      "name": "城3",
+      "x": 1300,
+      "y": 900,
+      "state": "jing",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c4",
+      "name": "城4",
+      "x": 1600,
+      "y": 1250,
+      "state": "jing",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c5",
+      "name": "城5",
+      "x": 950,
+      "y": 700,
+      "state": "yang",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c6",
+      "name": "城6",
+      "x": 1450,
+      "y": 450,
+      "state": "yang",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c7",
+      "name": "城7",
+      "x": 350,
+      "y": 1300,
+      "state": "qing",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c8",
+      "name": "城8",
+      "x": 200,
+      "y": 650,
+      "state": "qing",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c9",
+      "name": "城9",
+      "x": 1050,
+      "y": 820,
+      "state": "yang",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    },
+    {
+      "id": "c10",
+      "name": "城10",
+      "x": 850,
+      "y": 1250,
+      "state": "qing",
+      "taskTypes": [
+        "barrack",
+        "market",
+        "farmland",
+        "tavern",
+        "academy",
+        "mine"
+      ]
+    }
+  ],
+  "waypoints": [
+    {
+      "id": "w1",
+      "x": 1100,
+      "y": 470
+    },
+    {
+      "id": "w2",
+      "x": 920,
+      "y": 380
+    }
+  ],
+  "roads": [
+    {
+      "id": "r1",
+      "pointRefs": [
+        "c1",
+        "c2"
+      ]
+    },
+    {
+      "id": "r2",
+      "pointRefs": [
+        "c1",
+        "c5"
+      ]
+    },
+    {
+      "id": "r3",
+      "pointRefs": [
+        "c2",
+        "c5"
+      ]
+    },
+    {
+      "id": "r4",
+      "pointRefs": [
+        "c3",
+        "c9"
+      ]
+    },
+    {
+      "id": "r5",
+      "pointRefs": [
+        "c3",
+        "c4"
+      ]
+    },
+    {
+      "id": "r6",
+      "pointRefs": [
+        "c4",
+        "c9"
+      ]
+    },
+    {
+      "id": "r7",
+      "pointRefs": [
+        "c5",
+        "c9"
+      ]
+    },
+    {
+      "id": "r8",
+      "pointRefs": [
+        "c3",
+        "c5"
+      ]
+    },
+    {
+      "id": "r9",
+      "pointRefs": [
+        "c3",
+        "c6"
+      ]
+    },
+    {
+      "id": "r10",
+      "pointRefs": [
+        "c6",
+        "c9"
+      ]
+    },
+    {
+      "id": "r11",
+      "pointRefs": [
+        "c7",
+        "c10"
+      ]
+    },
+    {
+      "id": "r12",
+      "pointRefs": [
+        "c7",
+        "c8"
+      ]
+    },
+    {
+      "id": "r13",
+      "pointRefs": [
+        "c1",
+        "c8"
+      ]
+    },
+    {
+      "id": "r14",
+      "pointRefs": [
+        "c5",
+        "c8"
+      ]
+    },
+    {
+      "id": "r15",
+      "pointRefs": [
+        "c9",
+        "c10"
+      ]
+    },
+    {
+      "id": "r16",
+      "pointRefs": [
+        "c9",
+        "w1"
+      ]
+    },
+    {
+      "id": "r17",
+      "pointRefs": [
+        "c2",
+        "w1"
+      ]
+    },
+    {
+      "id": "r18",
+      "pointRefs": [
+        "c6",
+        "w1"
+      ]
+    },
+    {
+      "id": "r19",
+      "pointRefs": [
+        "c2",
+        "w2"
+      ]
+    },
+    {
+      "id": "r20",
+      "pointRefs": [
+        "c1",
+        "w2"
+      ]
+    },
+    {
+      "id": "r21",
+      "pointRefs": [
+        "c3",
+        "w2"
+      ]
+    }
+  ]
+}

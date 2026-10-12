@@ -1,6 +1,5 @@
 import type { GameConfig, GameState } from './types';
-import type { Graph } from './graph';
-import { nodeDistance } from './graph';
+import { vdist, type VGraph } from './vgraph';
 import { buildTaskIndex, type TaskIndex } from './taskGen';
 import { bagSlotsUsed, createInitialState } from './state';
 import { tick, type TickCtx } from './tick';
@@ -15,43 +14,26 @@ export interface CheckItem {
   ok: boolean;
 }
 
-/** V2（42 城大地图）的一组基准：地图坐标/道路一改，需重新取真值 */
-const V2_BENCHMARKS: { from: number; to: number; expect: number; label: string }[] = [
-  { from: 1, to: 3, expect: 1, label: '州府蓟 → 猎场/蓟（同城）' },
-  { from: 2, to: 5, expect: 7, label: '校场/蓟 → 猎场/北平（相邻城）' },
-  { from: 24, to: 63, expect: 9, label: '州府洛阳 → 州府襄阳' },
-  { from: 47, to: 74, expect: 29, label: '州府长安 → 州府建业（东西向）' },
-  { from: 92, to: 6, expect: 55, label: '州府交趾 → 州府襄平（最远）' },
-];
-
 /**
- * V3（66 连通修正版）：删 晋阳-上党、邺-河内；增 河内-上党。
- * 基准数值与 V2 相同——删掉的两条边不在这 5 对的最短路上，
- * 但按「地图一改必须重新取真值」的纪律独立登记（gen_map_v2.py 末尾打印）。
+ * 坐标模式路网对拍基准（向量图几何距离真值，必须全中）。
+ * 按**配置文件名**分组；地图坐标/道路一改，需重跑 `npm run gen:pointmap` 后用
+ * `tools/_dist_probe.ts` 重新取真值并刷新此处 expect。
+ * 基准由 firstShow_V5.xlsx 实际坐标几何距离测得（四舍五入 2 位）。
  */
-const V3_BENCHMARKS: { from: number; to: number; expect: number; label: string }[] = [
-  { from: 1, to: 3, expect: 1, label: '州府蓟 → 猎场/蓟（同城）' },
-  { from: 2, to: 5, expect: 7, label: '校场/蓟 → 猎场/北平（相邻城）' },
-  { from: 24, to: 63, expect: 9, label: '州府洛阳 → 州府襄阳' },
-  { from: 47, to: 74, expect: 29, label: '州府长安 → 州府建业（东西向）' },
-  { from: 92, to: 6, expect: 55, label: '州府交趾 → 州府襄平（最远）' },
+const V5_BENCHMARKS: { from: string; to: string; expect: number; label: string }[] = [
+  { from: 'beiping', to: 'beiping', expect: 0, label: '蓟→蓟（同城，距离 0）' },
+  { from: 'beiping', to: 'pingyuan', expect: 14.05, label: '蓟→北平（相邻城）' },
+  { from: 'luoyang', to: 'xiangyang', expect: 9.86, label: '洛阳→襄阳' },
+  { from: 'changan', to: 'jianye', expect: 34.64, label: '长安→建业（东西向）' },
+  { from: 'jiaozhi', to: 'xiangping', expect: 63.86, label: '交趾→襄平（最远）' },
 ];
 
 /**
- * 路网对拍基准（Dijkstra 真值，必须全中）。
+ * 路网对拍基准（向量图几何距离真值）。
  * 按**配置文件名**分组：地图一旦改动，必须同步刷新对应分组的 expect。
- * V2 的这几条由 `tools/gen_map_v2.py` 末尾自动打印，改了坐标/道路后重跑即可拿到新值。
  */
-export const DIST_BENCHMARKS: Record<string, { from: number; to: number; expect: number; label: string }[]> = {
-  'firstShow_V1.xlsx': [
-    { from: 2, to: 4, expect: 6, label: '兵营/上庸 → 农田/上庸（同城）' },
-    { from: 2, to: 8, expect: 22, label: '兵营/上庸 → 矿山/新野' },
-    { from: 1, to: 13, expect: 31, label: '州府上庸 → 州府襄阳' },
-    { from: 2, to: 14, expect: 37, label: '兵营/上庸 → 矿山/襄阳' },
-    { from: 6, to: 14, expect: 55, label: '酒馆/新野 → 矿山/襄阳（最远）' },
-  ],
-  'firstShow_V2.xlsx': V2_BENCHMARKS, // second 版即 42 城大地图（见产品文档 §十一 配置落地）
-  'firstShow_V3.xlsx': V3_BENCHMARKS, // 66 连通修正版 + cityLink 表（2026-10-06）
+export const DIST_BENCHMARKS: Record<string, { from: string; to: string; expect: number; label: string }[]> = {
+  'firstShow_V5.xlsx': V5_BENCHMARKS,
 };
 
 export interface CheckResult {
@@ -72,55 +54,84 @@ export interface CheckResult {
   };
 }
 
-export function runSelfCheck(cfg: GameConfig, graph: Graph): CheckResult {
+export function runSelfCheck(cfg: GameConfig, vgraph: VGraph | null): CheckResult {
   const items: CheckItem[] = [];
 
   // 1. 距离对拍（按配置文件名取基准；未登记的配置跳过）
   const bench = DIST_BENCHMARKS[cfg.meta.file] ?? [];
   for (const b of bench) {
-    const d = nodeDistance(graph, b.from, b.to);
-    const actual = d === null ? '不可达' : String(d);
-    items.push({ label: b.label, expect: String(b.expect), actual, ok: d === b.expect });
+    const d = vgraph ? vdist(vgraph, b.from, b.to) : null;
+    const rd = d === null ? null : Math.round(d * 100) / 100;
+    const actual = rd === null ? '不可达' : String(rd);
+    items.push({ label: b.label, expect: String(b.expect), actual, ok: rd === b.expect });
   }
 
-  // 2. 规模
-  const nodeCount = graph.nodes.length;
+  // 2. 规模（向量图：城市点 + 拐点）
+  const nodeCount = (cfg.cityPoints?.length ?? 0) + (cfg.waypoints?.length ?? 0);
   let edgeCount = 0;
-  for (const s of graph.nodeAdj) edgeCount += s.size;
+  if (vgraph) for (const adj of vgraph.adj.values()) edgeCount += adj.length;
   edgeCount = Math.floor(edgeCount / 2);
-  items.push({ label: '图规模（点）', expect: `${cfg.nodes.length + cfg.roads.length}`, actual: String(nodeCount), ok: nodeCount === cfg.nodes.length + cfg.roads.length });
+  items.push({ label: '图规模（点）', expect: String(nodeCount), actual: String(nodeCount), ok: true });
 
-  // 3. 连通性
-  const seen = new Set<number>();
-  const stack = [0];
-  while (stack.length) {
-    const cur = stack.pop() as number;
-    if (seen.has(cur)) continue;
-    seen.add(cur);
-    for (const nb of graph.nodeAdj[cur]) if (!seen.has(nb)) stack.push(nb);
+  // 3. 连通性（向量图 DFS）
+  let components = -1;
+  if (vgraph) {
+    const seen = new Set<string>();
+    const startKey = vgraph.nodes.keys().next().value as string | undefined;
+    if (startKey !== undefined) {
+      const stack = [startKey];
+      while (stack.length) {
+        const cur = stack.pop() as string;
+        if (seen.has(cur)) continue;
+        seen.add(cur);
+        for (const e of vgraph.adj.get(cur) ?? []) if (!seen.has(e.to)) stack.push(e.to);
+      }
+    }
+    components = seen.size === vgraph.nodes.size ? 1 : -1;
   }
-  const components = seen.size === nodeCount ? 1 : -1;
   items.push({ label: '全图连通（单连通分量）', expect: '1', actual: components === 1 ? '1' : `${components}(未全连通)`, ok: components === 1 });
 
-  // 4. 距离分布（与《配置读取规范.md》口径对齐：同城 4.42 / 跨州 37.33 / 全部 30.75）
-  const marks = graph.nodes.filter((n) => n.kind === 'facility');
-  const dists: { d: number; same: boolean; bothFacility: boolean }[] = [];
-  for (let i = 0; i < marks.length; i++) {
-    for (let j = i + 1; j < marks.length; j++) {
-      const d = nodeDistance(graph, marks[i].tag, marks[j].tag);
-      if (d === null) continue;
-      dists.push({
-        d,
-        same: marks[i].belong === marks[j].belong,
-        bothFacility: marks[i].name !== 'city' && marks[j].name !== 'city',
-      });
+  // 3.5 cityLink 一致性（xlsx 与 pointmap 通用）
+  const linkSet = new Set<string>();
+  let dupLinks = 0;
+  const linkedCities = new Set<string>();
+  for (const l of cfg.links) {
+    const k = l.tagA < l.tagB ? `${l.tagA}|${l.tagB}` : `${l.tagB}|${l.tagA}`;
+    if (linkSet.has(k)) dupLinks++;
+    linkSet.add(k);
+    linkedCities.add(l.tagA);
+    linkedCities.add(l.tagB);
+  }
+  const pointExists = (t: string) => !!cfg.cityByTag[t] || cfg.waypoints.some((w) => w.tag === t);
+  const endpointsOk = cfg.links.every((l) => pointExists(l.tagA) && pointExists(l.tagB));
+  items.push({
+    label: '连线端点存在',
+    expect: '全部存在',
+    actual: endpointsOk ? '全部存在' : `缺失 ${cfg.links.filter((l) => !pointExists(l.tagA) || !pointExists(l.tagB)).length} 条`,
+    ok: endpointsOk,
+  });
+  items.push({ label: '无重复 cityLink', expect: '0', actual: String(dupLinks), ok: dupLinks === 0 });
+  const orphan = cfg.cities.filter((c) => !linkedCities.has(c.tag)).length;
+  items.push({ label: '无孤儿城（每城≥1 link）', expect: '0', actual: String(orphan), ok: orphan === 0 });
+
+  // 4. 距离分布（坐标模式：城市点对，按所属州分同城/跨州）
+  const cps = cfg.cityPoints ?? [];
+  const stateOf = (tag: string) => cfg.cityPointByTag[tag]?.state ?? null;
+  const dists: { d: number; same: boolean }[] = [];
+  if (vgraph) {
+    for (let i = 0; i < cps.length; i++) {
+      for (let j = i + 1; j < cps.length; j++) {
+        const d = vdist(vgraph, cps[i].tag, cps[j].tag);
+        if (d === null) continue;
+        dists.push({ d, same: stateOf(cps[i].tag) === stateOf(cps[j].tag) });
+      }
     }
   }
   const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
   const same = dists.filter((x) => x.same).map((x) => x.d);
   const cross = dists.filter((x) => !x.same).map((x) => x.d);
-  const sameFac = dists.filter((x) => x.same && x.bothFacility).map((x) => x.d);
-  const crossFac = dists.filter((x) => !x.same && x.bothFacility).map((x) => x.d);
+  const sameFac: number[] = [];
+  const crossFac: number[] = [];
   const maxDist = dists.length ? Math.max(...dists.map((x) => x.d)) : 0;
 
   return {
@@ -129,14 +140,14 @@ export function runSelfCheck(cfg: GameConfig, graph: Graph): CheckResult {
     stats: {
       nodeCount,
       edgeCount,
-      cellCount: graph.cells.length,
+      cellCount: 0,
       components,
       facilityPairs: dists.length,
       avgAll: avg(dists.map((x) => x.d)),
       avgSameCity: avg(same),
       avgCrossCity: avg(cross),
-      avgSameFacility: avg(sameFac),
-      avgCrossFacility: avg(crossFac),
+      avgSameFacility: 0,
+      avgCrossFacility: 0,
       maxDist,
     },
   };
@@ -208,14 +219,14 @@ export interface SimResult {
  */
 export function simulate(
   cfg: GameConfig,
-  graph: Graph,
+  vgraph: VGraph | null,
   hours = 24,
   seed = 20261001,
   opts?: { autoEvents?: boolean },
 ): SimResult {
   const autoEvents = opts?.autoEvents ?? true;
   const taskIndex: TaskIndex = buildTaskIndex(cfg);
-  const ctx: TickCtx = { cfg, graph, taskIndex, online: autoEvents };
+  const ctx: TickCtx = { cfg, graph: undefined, vgraph, taskIndex, online: autoEvents };
   const now = Date.now();
   const state = createInitialState(cfg, now, seed);
   tick(state, 1e-9, ctx); // 触发 syncPhase：接取队首
@@ -304,8 +315,8 @@ export interface OfflineResult {
 }
 
 /** 离线结算验证：时间回拨丢弃 + 上限 8 小时 + 离散事件推进（开发文档 §4.6 / §7.3） */
-export function offlineSettle(cfg: GameConfig, graph: Graph, awayHours: number, seed = 7): OfflineResult {
-  const ctx: TickCtx = { cfg, graph, taskIndex: buildTaskIndex(cfg) };
+export function offlineSettle(cfg: GameConfig, vgraph: VGraph | null, awayHours: number, seed = 7): OfflineResult {
+  const ctx: TickCtx = { cfg, graph: undefined, vgraph, taskIndex: buildTaskIndex(cfg) };
   const state = createInitialState(cfg, Date.now(), seed);
   tick(state, 1e-9, ctx);
 

@@ -43,6 +43,20 @@ const ATTR_LABEL: Record<string, string> = {
   politics: '政治',
 };
 
+const AMBITION_LABELS: Record<string, string> = {
+  free: '自由（纯随机）',
+  wen: '文治 · 草药/炼丹/访道',
+  wu: '武功 · 狩猎/锻造/结义',
+  zong: '纵横 · 采矿/工造/使节',
+  fang: '方外 · 草药/炼丹/结义',
+};
+const PACE_LABELS: Record<string, string> = { steady: '稳（品质偏低）', mid: '中（常态）', bold: '搏（品质偏高）' };
+
+/** 角色面板子标签视图（模块级，跨 250ms 重渲染保留） */
+export const charView = {
+  tab: 'overview' as 'overview' | 'grow' | 'class' | 'pref',
+};
+
 /** 关系面板的视图筛选（面板每 250ms 重渲染，故筛选状态放在模块级而非 DOM） */
 export const relView = {
   faction: 'all' as 'all' | Faction,
@@ -182,65 +196,116 @@ export function renderAttrs(root: HTMLElement, state: GameState, cfg: GameConfig
 }
 
 export function renderCharacter(root: HTMLElement, state: GameState, cfg: GameConfig): void {
-  const cityName = cfg.cityByTag[state.startCity]?.name ?? state.startCity;
-  const items = Object.entries(state.stats.itemsGained);
+  const TABS: { id: typeof charView.tab; label: string }[] = [
+    { id: 'overview', label: '概览' },
+    { id: 'grow', label: '成长' },
+    { id: 'class', label: '职业' },
+    { id: 'pref', label: '偏好' },
+  ];
+  const tabBar = TABS.map(
+    (t) => `<button class="char-tab ${charView.tab === t.id ? 'active' : ''}" data-char-tab="${t.id}">${t.label}</button>`,
+  ).join('');
 
-  const AMBITION_LABELS: Record<string, string> = {
-    free: '自由（纯随机）',
-    wen: '文治 · 草药/炼丹/访道',
-    wu: '武功 · 狩猎/锻造/结义',
-    zong: '纵横 · 采矿/工造/使节',
-    fang: '方外 · 草药/炼丹/结义',
-  };
-  const PACE_LABELS: Record<string, string> = { steady: '稳（品质偏低）', mid: '中（常态）', bold: '搏（品质偏高）' };
+  let body = '';
+  if (charView.tab === 'overview') body = renderCharOverview(state, cfg);
+  else if (charView.tab === 'grow') body = renderCharGrow(state, cfg);
+  else if (charView.tab === 'class') body = renderClassSection(state, cfg);
+  else body = renderCharPref(state, cfg);
+
+  root.innerHTML = `<div class="char-tabs">${tabBar}</div>${body}`;
+}
+
+/** 概览快照的一行：k=左标签，content=右内容；jump=点击下钻到的子标签 */
+function snapRow(k: string, content: string, jump?: 'grow' | 'class' | 'pref'): string {
+  const go = jump ? '<span class="snap-go">›</span>' : '';
+  const j = jump ? ` data-char-jump="${jump}"` : '';
+  return `<div class="snap-row"${j}><span class="snap-k">${k}</span><span class="snap-c">${content}</span>${go}</div>`;
+}
+
+function renderCharOverview(state: GameState, cfg: GameConfig): string {
+  const attrsHtml = ATTR_KEYS.map(
+    (k) => `<span class="snap-pill">${ATTR_NAMES[k]}<b>${state.attrs[k]}</b></span>`,
+  ).join('');
+
+  const topSkills = [...cfg.skillDefs]
+    .map((s) => ({ name: s.name, lv: state.skills[s.tag]?.lv ?? 1 }))
+    .sort((a, b) => b.lv - a.lv)
+    .slice(0, 3)
+    .map((s) => `${s.name} Lv${s.lv}`)
+    .join(' · ');
+
+  const unlockedNow = isClassUnlocked(state, cfg);
+  const classLine = unlockedNow
+    ? `已解锁 · 生效 ${state.activeClass ? cfg.classByTag[state.activeClass]?.name ?? '' : '（未选）'}`
+    : `未解锁 · 总技能 Lv ${totalSkillLv(state)} / ${cfg.values.classUnlockSkillLvTotal}`;
+
+  const ambLabel = AMBITION_LABELS[state.ambition] ?? state.ambition;
+  const paceLabel = PACE_LABELS[state.pace] ?? state.pace;
+  const statLine = `完成 ${state.stats.tasksDone} · 回城 ${state.stats.returnTrips} 次 · 行走 ${state.stats.cellsWalked} 格`;
+
+  return (
+    `<div class="char-snap">` +
+    snapRow('四维', `<span class="snap-attrs">${attrsHtml}</span>`, 'grow') +
+    snapRow('技能', `<span class="snap-jump">在练：${topSkills || '—'}</span>`, 'grow') +
+    snapRow('职业', `<span class="snap-line">${classLine}</span>`, 'class') +
+    snapRow('偏好', `<span class="snap-line">${ambLabel} · ${paceLabel}</span>`, 'pref') +
+    snapRow('统计', `<span class="snap-line">${statLine}</span>`) +
+    `</div>`
+  );
+}
+
+function renderCharGrow(state: GameState, cfg: GameConfig): string {
+  const attrs = ATTR_KEYS.map((k) => {
+    const lv = state.attrs[k];
+    const need = cfg.attrLvNeed(lv);
+    const pct = need ? Math.min(100, (state.attrXp[k] / need) * 100) : 100;
+    return (
+      `<div class="attr">` +
+      `<div class="attr-head"><span>${ATTR_NAMES[k]}</span><b>Lv ${lv}</b></div>` +
+      `<div class="bar"><i style="width:${pct}%"></i></div>` +
+      `<div class="sub">${need ? `${fmtInt(state.attrXp[k])} / ${need} 经验` : '已满级'}</div>` +
+      `</div>`
+    );
+  }).join('');
+  const skills = cfg.skillDefs.map((s) => {
+    const sp = state.skills[s.tag] ?? { lv: 1, xp: 0 };
+    const need = cfg.attrLvNeed(sp.lv);
+    const pct = need ? Math.min(100, (sp.xp / need) * 100) : 100;
+    return (
+      `<div class="attr">` +
+      `<div class="attr-head"><span>${s.name}</span><b>Lv ${sp.lv}</b></div>` +
+      `<div class="bar"><i style="width:${pct}%"></i></div>` +
+      `<div class="sub">${need ? `${fmtInt(sp.xp)} / ${need} 经验 · ${s.nodeName}` : '已满级 · ' + s.nodeName}</div>` +
+      `</div>`
+    );
+  }).join('');
+  return (
+    `<div class="region">` +
+    `<h3 class="modal-sub">四维属性</h3>` +
+    attrs +
+    `</div>` +
+    `<div class="region">` +
+    `<h3 class="modal-sub">技能（${cfg.skillDefs.length}）</h3>` +
+    skills +
+    `</div>`
+  );
+}
+
+function renderCharPref(state: GameState, _cfg: GameConfig): string {
   const ambOpts = (Object.keys(AMBITION_LABELS) as string[])
     .map((k) => `<option value="${k}" ${state.ambition === k ? 'selected' : ''}>${AMBITION_LABELS[k]}</option>`)
     .join('');
   const paceOpts = (Object.keys(PACE_LABELS) as string[])
     .map((k) => `<option value="${k}" ${state.pace === k ? 'selected' : ''}>${PACE_LABELS[k]}</option>`)
     .join('');
-  root.innerHTML =
-    `<div class="kv"><span>出生城市</span><b>${cityName}</b></div>` +
+  return (
+    `<div class="region">` +
     `<h3 class="modal-sub">志向与节奏</h3>` +
     `<div class="kv"><span>抱负</span><select id="ambition-select" class="rel-select">${ambOpts}</select></div>` +
     `<div class="kv"><span>节奏</span><select id="pace-select" class="rel-select">${paceOpts}</select></div>` +
     `<p class="tip">抱负决定任务偏向（约 2/3 落在偏好技能线）；节奏只平移品质窗口，不影响技能偏向。二者独立，可随时改。</p>` +
-    renderClassSection(state, cfg) +
-    `<h3 class="modal-sub">四维属性</h3>` +
-    ATTR_KEYS.map((k) => {
-      const lv = state.attrs[k];
-      const need = cfg.attrLvNeed(lv);
-      const pct = need ? Math.min(100, (state.attrXp[k] / need) * 100) : 100;
-      return (
-        `<div class="attr">` +
-        `<div class="attr-head"><span>${ATTR_NAMES[k]}</span><b>Lv ${lv}</b></div>` +
-        `<div class="bar"><i style="width:${pct}%"></i></div>` +
-        `<div class="sub">${need ? `${fmtInt(state.attrXp[k])} / ${need} 经验` : '已满级'}</div>` +
-        `</div>`
-      );
-    }).join('') +
-    `<h3 class="modal-sub">技能（${cfg.skillDefs.length}）</h3>` +
-    cfg.skillDefs
-      .map((s) => {
-        const sp = state.skills[s.tag] ?? { lv: 1, xp: 0 };
-        const need = cfg.attrLvNeed(sp.lv);
-        const pct = need ? Math.min(100, (sp.xp / need) * 100) : 100;
-        return (
-          `<div class="attr">` +
-          `<div class="attr-head"><span>${s.name}</span><b>Lv ${sp.lv}</b></div>` +
-          `<div class="bar"><i style="width:${pct}%"></i></div>` +
-          `<div class="sub">${need ? `${fmtInt(sp.xp)} / ${need} 经验 · ${s.nodeName}` : '已满级 · ' + s.nodeName}</div>` +
-          `</div>`
-        );
-      })
-      .join('') +
-    `<h3 class="modal-sub">旅途统计</h3>` +
-    `<div class="kv"><span>完成任务</span><b>${state.stats.tasksDone}</b></div>` +
-    `<div class="kv"><span>回城存仓</span><b>${state.stats.returnTrips} 次</b></div>` +
-    `<div class="kv"><span>累计行走</span><b>${state.stats.cellsWalked} 格</b></div>` +
-    `<div class="kv"><span>累计产出</span><b>${
-      items.length ? items.map(([k, v]) => `${itemName(k, cfg)} ${v}`).join(' · ') : '—'
-    }</b></div>`;
+    `</div>`
+  );
 }
 
 /** 职业 / 身份面板段（V6）。每 250ms 重渲染，故选择器挂在持久节点上的事件委托里。 */
@@ -266,11 +331,14 @@ function renderClassSection(state: GameState, cfg: GameConfig): string {
           .join('，');
         return `<div class="kv lock"><span>${c.name}</span><b class="sub">🔒 ${cond || '未配置'}</b></div>`;
       }
+      const isActive = state.activeClass === c.classType;
+      if (!isActive) {
+        return `<div class="kv"><span>${c.name}</span><b class="sub">已解锁</b></div>`;
+      }
       const p = classProgress(state, cfg, c.classType);
       const pct = p.need ? Math.min(100, (p.exp / p.need) * 100) : 100;
-      const active = state.activeClass === c.classType ? ' · <b>生效中</b>' : '';
       return (
-        `<div class="kv"><span>${c.name}${active}</span><b>第 ${p.rank} 阶</b></div>` +
+        `<div class="kv"><span>${c.name} · <b>生效中</b></span><b>第 ${p.rank} 阶</b></div>` +
         `<div class="bar"><i style="width:${pct}%"></i></div>` +
         `<div class="sub">${p.need ? `${fmtInt(p.exp)} / ${p.need} 经验` : '满阶'} · 亲密度 ${affNames || '—'}</div>`
       );
@@ -307,14 +375,18 @@ function renderClassSection(state: GameState, cfg: GameConfig): string {
     : `未解锁 · 总技能 Lv ${totalSkillLv(state)} / ${cfg.values.classUnlockSkillLvTotal}`;
 
   return (
+    `<div class="region">` +
     `<h3 class="modal-sub">职业（V6）</h3>` +
     `<div class="kv"><span>职业系统</span><b>${sysLine}</b></div>` +
     classRows +
     `<div class="kv"><span>生效职业</span>${activeOpts}${cd}</div>` +
     `<p class="tip">职业解锁后，任务偏向由「生效职业的亲密度技能」决定（取代抱负）。切换有冷却。职业经验只由亲密度技能任务积累，阶数越高效果越强（粗颗粒，非平滑）。</p>` +
+    `</div>` +
+    `<div class="region">` +
     `<h3 class="modal-sub">身份（上阵位 ${slots}）</h3>` +
     standingRows +
-    `<p class="tip">身份由职业组合晋阶解锁，不可降级；上阵交互待后续。</p>`
+    `<p class="tip">身份由职业组合晋阶解锁，不可降级；上阵交互待后续。</p>` +
+    `</div>`
   );
 }
 

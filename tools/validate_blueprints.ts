@@ -4,7 +4,7 @@
  * BLUEPRINT_NODES 逐档解锁，且不过早洪泛。
  */
 import { loadConfig } from './pickConfig';
-import { buildGraph } from '../src/game/graph';
+import { buildVGraph } from '../src/game/vgraph';
 import { simulate } from '../src/game/selfcheck';
 
 const { config, picked } = loadConfig(process.argv[3]);
@@ -28,7 +28,7 @@ const days = (process.argv[2] || '7,14,30,60,90,120')
 
 console.log('天数 | 好感 | 图纸数 | 各C技能节点进度(sworn/visiting/envoy) | 理论应解锁节点(按 favor×tier)');
 for (const d of days) {
-  const sim = simulate(config, graph, d * 24);
+  const sim = simulate(config, vgraph, d * 24);
   const node = sim.blueprintNode;
   const bySkill = ['sworn', 'visiting', 'envoy']
     .map((s) => `${s}=${node[s] ?? 0}`)

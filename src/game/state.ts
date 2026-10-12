@@ -98,8 +98,13 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
   const cityTag = pickOne(state, candidates.length ? candidates : cfg.cities.map((c) => c.tag)) ?? cfg.cities[0]?.tag ?? '';
   state.startCity = cityTag;
   state.visitedCities.push(cityTag); // 出生地视为已造访，不再触发"到达新城市"
-  const cityNode = cfg.nodes.find((n) => n.belong === cityTag && n.name === 'city');
-  if (cityNode) state.cell = pickSpawnCell(cityNode.cells);
+  // 向量地图：出生点用城市离散坐标中心；否则用格子城块（最左上格）
+  const cp = cfg.cityPointByTag[cityTag];
+  if (cp) state.cell = { x: cp.x, y: cp.y };
+  else {
+    const cityNode = cfg.nodes.find((n) => n.belong === cityTag && n.name === 'city');
+    if (cityNode) state.cell = pickSpawnCell(cityNode.cells);
+  }
 
   // 四维初始 2–5 随机
   for (const key of ATTR_KEYS) {

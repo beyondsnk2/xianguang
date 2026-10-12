@@ -1,14 +1,10 @@
 import { MAP_H, MAP_W } from '../game/constants';
 import type { Cell, GameConfig, GameState, MapNodeDef } from '../game/types';
-import type { Graph } from '../game/graph';
-import { findPath } from '../game/graph';
 import { currentCell, pointOnPath } from '../game/tick';
 import {
   BG,
-  BLOCK,
   DYN,
   FAC_FALLBACK,
-  NEUTRAL_BLOCK,
   NODE,
   ROAD,
   SMOOTH,
@@ -44,14 +40,10 @@ export class MapRenderer {
   private cfgKey = '';
   /** 文明区距离场（格）：-1 = 区外 */
   private gf: Int16Array | null = null;
-  /** 每格所属州 tag（仅文明区内有效），null = 无 */
-  private gstTag: (string | null)[] | null = null;
   /** L1 城块色斑离屏层（低分辨率，缩放时平滑放大） */
   private blockCanvas: HTMLCanvasElement | null = null;
   /** L2 城际曲线（格坐标平滑折线，每帧按当前缩放描边） */
   private roadCurves: SmoothCurve[] = [];
-  /** 州名质心（格坐标） */
-  private stateCentroids: { name: string; gx: number; gy: number }[] = [];
 
   /** L0 背景离屏层（按画布尺寸烘焙） */
   private bgCanvas: HTMLCanvasElement | null = null;
@@ -62,6 +54,10 @@ export class MapRenderer {
 
   /** L4 动态路径平滑缓存（按 phase.path 引用缓存，避免逐帧重算） */
   private pathCache = new Map<Cell[], SmoothCurve>();
+  /** 当前是否直线模式（直线模式下角色轨迹不做平滑，直接贴道路格，与 L2 连线一致） */
+  private straightMode = false;
+  /** 当前是否向量模式（城市/拐点/道路/区域基于离散坐标，非格子） */
+  private vectorMode = false;
   /** 节点格中心缓存（格坐标，与缩放无关；按节点引用缓存，避免逐帧重算） */
   private nodeCenters: Map<MapNodeDef, Pt> | null = null;
   /** 设施中文名缓存（按 cfg.tasks 烘焙一次，避免逐帧线性扫描） */
@@ -78,12 +74,10 @@ export class MapRenderer {
   setMapSize(w: number, h: number): void {
     this.mapW = Math.max(1, w);
     this.mapH = Math.max(1, h);
-    // 地图尺寸变化 → 距离场 / 城块 / 曲线 / 州名全部失效
+    // 地图尺寸变化 → 距离场 / 城块 / 曲线全部失效（去州化：无州分区色块/州名）
     this.gf = null;
-    this.gstTag = null;
     this.blockCanvas = null;
     this.roadCurves = [];
-    this.stateCentroids = [];
     this.nodeCenters = null;
     this.facLabels = null;
     this.cfgKey = '';
@@ -128,210 +122,55 @@ export class MapRenderer {
 
   // ───────────────────────── 烘焙（L0–L3） ─────────────────────────
 
-  /** 惰性烘焙：配置指纹变化时才重算（R3：setMapSize 后惰性触发） */
-  private ensureBaked(cfg: GameConfig, graph: Graph): void {
-    const key = `${this.mapW}x${this.mapH}|${cfg.meta.setName}@${cfg.meta.version}|${cfg.links.length}|${cfg.states.length}|${cfg.mapBgImg ?? ''}`;
-    if (key === this.cfgKey && this.gf) return;
+  /** 惰性烘焙：配置指纹变化时才重算（R3：setMapSize 后惰性触发）。
+   *  坐标模式：城市/拐点/道路/区域基于离散坐标，无格子烘焙（格子分支已退休）。 */
+  private ensureBaked(cfg: GameConfig): void {
+    const vector = (cfg.cityPoints?.length ?? 0) > 0 && (cfg.roadLines?.length ?? 0) > 0;
+    this.vectorMode = vector;
+    const key = `${this.mapW}x${this.mapH}|${cfg.meta.setName}@${cfg.meta.version}|${cfg.links.length}|${cfg.mapBgImg ?? ''}|${vector ? 'V' : 'G'}|${cfg.roadLines?.length ?? 0}`;
+    if (key === this.cfgKey && (this.gf || vector)) return;
     this.cfgKey = key;
     this.nodeCenters = new Map();
     this.facLabels = new Map();
     for (const t of cfg.tasks ?? []) this.facLabels.set(t.nodeType, t.nodeName);
-    this.bakeCivilized(cfg);
-    this.bakeBlock(cfg);
-    this.roadCurves = this.buildRoads(cfg, graph);
-    this.stateCentroids = this.buildStateCentroids(cfg);
+
+    // 坐标模式：城市/拐点/道路/区域基于离散坐标，无格子烘焙（退休格子分支）
+    this.mapW = Math.max(1, cfg.mapBounds?.w ?? 1);
+    this.mapH = Math.max(1, cfg.mapBounds?.h ?? 1);
+    this.gf = null;
+    this.blockCanvas = null;
+    this.roadCurves = this.buildRoadsVector(cfg);
     this.loadBg(cfg);
   }
 
-  /** L1 距离场 + 州色场：文明区 = 节点格 ∪ 道路格的 BFS 距离 ≤ R；块并集即大陆 */
-  private bakeCivilized(cfg: GameConfig): void {
-    const W = this.mapW;
-    const H = this.mapH;
-    const gf = new Int16Array(W * H).fill(-1);
-    const st = new Array<string | null>(W * H).fill(null);
-    const inB = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H;
-    const qx: number[] = [];
-    const qy: number[] = [];
-    let qh = 0;
 
-    // 源：所有节点格 + 道路格
-    const seedCell = (x: number, y: number) => {
-      if (!inB(x, y)) return;
-      const i = y * W + x;
-      if (gf[i] === -1) {
-        gf[i] = 0;
-        qx.push(x);
-        qy.push(y);
-      }
-    };
-    for (const n of cfg.nodes) for (const c of n.cells) seedCell(c.x, c.y);
-    for (const r of cfg.roads) seedCell(r.cell.x, r.cell.y);
-
-    // 距离场 BFS
-    while (qh < qx.length) {
-      const x = qx[qh];
-      const y = qy[qh];
-      qh++;
-      const d = gf[y * W + x];
-      for (const [dx, dy] of DIRS) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (!inB(nx, ny)) continue;
-        const i = ny * W + nx;
-        if (gf[i] === -1 || gf[i] > d + 1) {
-          gf[i] = d + 1;
-          qx.push(nx);
-          qy.push(ny);
-        }
-      }
-    }
-
-    // 州色场：从城格 BFS，只进入文明区（gf ≤ R）
-    const cityNodes = cfg.nodes.filter((n) => n.name === 'city');
-    qx.length = 0;
-    qy.length = 0;
-    qh = 0;
-    for (const n of cityNodes) {
-      const city = cfg.cityByTag[n.belong ?? ''];
-      const tag = city?.state ?? null;
-      if (!tag) continue;
-      for (const c of n.cells) {
-        if (!inB(c.x, c.y)) continue;
-        const i = c.y * W + c.x;
-        if (st[i] === null) {
-          st[i] = tag;
-          qx.push(c.x);
-          qy.push(c.y);
-        }
-      }
-    }
-    while (qh < qx.length) {
-      const x = qx[qh];
-      const y = qy[qh];
-      qh++;
-      const tag = st[y * W + x]!;
-      for (const [dx, dy] of DIRS) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (!inB(nx, ny)) continue;
-        const i = ny * W + nx;
-        if (gf[i] === -1 || gf[i] > BLOCK.civilizedRadius) continue;
-        if (st[i] === null) {
-          st[i] = tag;
-          qx.push(nx);
-          qy.push(ny);
-        }
-      }
-    }
-
-    this.gf = gf;
-    this.gstTag = st;
-  }
-
-  /** L1 城块色斑烘焙（低分辨率离屏，缩放时平滑放大 → 有机边界） */
-  private bakeBlock(cfg: GameConfig): void {
-    const gf = this.gf;
-    const gst = this.gstTag;
-    const W = this.mapW;
-    const H = this.mapH;
-    const BW = BLOCK.bakeW;
-    const BH = BLOCK.bakeH;
-    const img = new ImageData(BW, BH);
-    const d = img.data;
-
-    for (let j = 0; j < BH; j++) {
-      for (let i = 0; i < BW; i++) {
-        const o = (j * BW + i) * 4;
-        // 像素 → 格坐标（domain warp 后采样）
-        let gx = (i / BW) * W;
-        let gy = (j / BH) * H;
-        const [wx, wy] = warp(gx, gy, BLOCK.warpAmp);
-        const cxi = Math.round(wx);
-        const cyi = Math.round(wy);
-        const inB = cxi >= 0 && cyi >= 0 && cxi < W && cyi < H;
-        const dist = inB ? gf![cyi * W + cxi] : -1;
-        if (dist < 0 || dist > BLOCK.civilizedRadius) {
-          d[o] = d[o + 1] = d[o + 2] = d[o + 3] = 0; // 透出背景
-          continue;
-        }
-        const tag = inB ? gst![cyi * W + cxi] : null;
-        const hex = tag ? cfg.stateByTag[tag]?.color ?? NEUTRAL_BLOCK : NEUTRAL_BLOCK;
-        let r = parseInt(hex.slice(1, 3), 16);
-        let g = parseInt(hex.slice(3, 5), 16);
-        let b = parseInt(hex.slice(5, 7), 16);
-        // 距离衰减：城心浓、边缘淡
-        const t = Math.min(1, dist / BLOCK.civilizedRadius);
-        const a = BLOCK.alphaCore + (BLOCK.alphaEdge - BLOCK.alphaCore) * t;
-        // 笔触细噪声
-        const nz = (fbm(gx * 0.5, gy * 0.5) - 0.5) * 2 * BLOCK.noiseAmp;
-        d[o] = clamp255(r + nz);
-        d[o + 1] = clamp255(g + nz);
-        d[o + 2] = clamp255(b + nz);
-        d[o + 3] = Math.round(a * 255);
-      }
-    }
-    const oc = document.createElement('canvas');
-    oc.width = BW;
-    oc.height = BH;
-    oc.getContext('2d')!.putImageData(img, 0, 0);
-    this.blockCanvas = oc;
-  }
-
-  /** L2 道路：每条 cityLink 跑 findPath 取真实路网路径 → 剪掉城内格、锚定城心 → 平滑 */
-  private buildRoads(cfg: GameConfig, graph: Graph): SmoothCurve[] {
+  /**
+   * L2 道路：roadLines 的几何折线直接转 SmoothCurve（pts=坐标空间折线，labels=点序号）。
+   * 直线/折线原样描边（drawRoads 只走折线，不做贝塞尔，避免几何折线被二次弯曲）。
+   * 兜底：无 points 时按 refs 两端节点坐标画直线（与 buildVGraph 的兜底一致，保证
+   * 「显示直线 = 角色移动 = 玩法距离」三者统一）。
+   */
+  private buildRoadsVector(cfg: GameConfig): SmoothCurve[] {
     const curves: SmoothCurve[] = [];
-    const keyOf = (c: Cell) => c.y * 1000 + c.x;
-    for (const link of cfg.links) {
-      const A = cfg.cityByTag[link.tagA];
-      const B = cfg.cityByTag[link.tagB];
-      if (!A || !B) continue;
-      const aNode = cfg.nodes.find((n) => n.name === 'city' && n.belong === A.tag);
-      const bNode = cfg.nodes.find((n) => n.name === 'city' && n.belong === B.tag);
-      if (!aNode || !bNode || !aNode.cells.length || !bNode.cells.length) continue;
-      const res = findPath(graph, aNode.cells[0], bNode.cells);
-      if (!res || res.cells.length < 2) continue;
-
-      // 剪掉起终点城内格（避免曲线在 2×2 城块内绕角/绕城边设施出钩）
-      const inA = new Set(aNode.cells.map(keyOf));
-      const inB = new Set(bNode.cells.map(keyOf));
-      const cs = res.cells;
-      let lo = 0;
-      let hi = cs.length - 1;
-      while (lo < hi && inA.has(keyOf(cs[lo]))) lo++;
-      while (hi > lo && inB.has(keyOf(cs[hi]))) hi--;
-      const mid = cs.slice(lo, hi + 1);
-
-      const cA = nodeGridCenter(aNode);
-      const cB = nodeGridCenter(bNode);
-      const curve: SmoothCurve =
-        mid.length >= 2
-          ? smoothPath(mid)
-          : { pts: [{ x: cs[lo].x + 0.5, y: cs[lo].y + 0.5 }], labels: [0] };
-      // 首尾锚定城心（曲线从城郭中心向外辐射，城名下方穿出）
-      curve.pts.unshift({ x: cA.x, y: cA.y });
-      curve.pts.push({ x: cB.x, y: cB.y });
-      curve.labels.unshift(0);
-      curve.labels.push(curve.labels[curve.labels.length - 1] + 1);
-      curves.push(curve);
+    const ptOf = (id: string): Pt | null => {
+      const cp = cfg.cityPointByTag[id];
+      if (cp) return { x: cp.x, y: cp.y };
+      const wp = cfg.waypoints.find((w) => w.id === id);
+      return wp ? { x: wp.x, y: wp.y } : null;
+    };
+    for (const rl of cfg.roadLines) {
+      let pts: Pt[];
+      if (rl.points && rl.points.length >= 2) {
+        pts = rl.points.map((p) => ({ x: p.x, y: p.y }));
+      } else {
+        const a = ptOf(rl.refs[0]);
+        const b = ptOf(rl.refs[1]);
+        if (!a || !b) continue;
+        pts = [a, b];
+      }
+      curves.push({ pts, labels: pts.map((_, i) => i) });
     }
     return curves;
-  }
-
-  /** L3 州名质心（格坐标），放大前用于大号低对比州名 */
-  private buildStateCentroids(cfg: GameConfig): { name: string; gx: number; gy: number }[] {
-    const acc = new Map<string, { x: number; y: number; n: number; name: string }>();
-    for (const node of cfg.nodes) {
-      if (node.name !== 'city') continue;
-      const tag = cfg.cityByTag[node.belong ?? '']?.state;
-      if (!tag) continue;
-      const c = nodeGridCenter(node);
-      const e = acc.get(tag) ?? { x: 0, y: 0, n: 0, name: cfg.stateByTag[tag]?.name ?? tag };
-      e.x += c.x;
-      e.y += c.y;
-      e.n++;
-      acc.set(tag, e);
-    }
-    return [...acc.values()].map((e) => ({ name: e.name, gx: e.x / e.n, gy: e.y / e.n }));
   }
 
   /** L0 背景：mapBgImg 有值 → 加载 cover 铺满 + 压暗；无/失败 → 程序化占位 */
@@ -420,10 +259,10 @@ export class MapRenderer {
 
   // ───────────────────────── 主绘制 ─────────────────────────
 
-  draw(cfg: GameConfig, graph: Graph, state: GameState, nowMs: number): void {
+  draw(cfg: GameConfig, state: GameState, nowMs: number): void {
     const ctx = this.ctx;
     const s = this.s;
-    this.ensureBaked(cfg, graph);
+    this.ensureBaked(cfg);
 
     if (!this.bgCanvas || this.bgKey !== this.bgKeyNow()) {
       this.bakeBg();
@@ -462,7 +301,8 @@ export class MapRenderer {
     const ctx = this.ctx;
     const s = this.s;
     if (!this.roadCurves.length) return;
-    const roadW = Math.max(ROAD.widthMin, s * ROAD.widthK);
+    // 向量模式坐标空间大、s 很小，道路用固定像素宽（含 halo），避免被缩成发丝
+    const roadW = this.vectorMode ? 4 : Math.max(ROAD.widthMin, s * ROAD.widthK);
     const halo = new Path2D();
     const bright = new Path2D();
     for (const curve of this.roadCurves) {
@@ -486,19 +326,12 @@ export class MapRenderer {
   }
 
   private drawNodes(cfg: GameConfig): void {
+    if (this.vectorMode) {
+      this.drawNodesVector(cfg);
+      return;
+    }
     const ctx = this.ctx;
     const s = this.s;
-
-    // 州名（放大前显示，低对比大号）
-    if (s < NODE.stateNameMaxS) {
-      ctx.font = `700 ${Math.max(14, s * 1.8)}px "PingFang SC","Microsoft YaHei",sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(245,239,220,0.16)';
-      for (const sc of this.stateCentroids) {
-        ctx.fillText(sc.name, this.px(sc.gx), this.py(sc.gy));
-      }
-    }
 
     // 设施点（在城下，避免遮挡城名）
     for (const node of cfg.nodes) {
@@ -531,6 +364,31 @@ export class MapRenderer {
       const c = this.nodeScreenCenter(node);
       const name = cfg.cityByTag[node.belong ?? '']?.name ?? '州府';
       this.drawCityGlyph(c.x, c.y, s * NODE.cityGlyphScale, name);
+    }
+  }
+
+  /** 向量模式节点绘制：拐点 + 城市（离散坐标；城市/拐点用固定像素尺寸，不随 s 缩放）。去州化：不渲染州分区色块/州名。 */
+  private drawNodesVector(cfg: GameConfig): void {
+    const ctx = this.ctx;
+
+    // 拐点（小圆点，无州色）
+    for (const w of cfg.waypoints) {
+      const x = this.px(w.x);
+      const y = this.py(w.y);
+      const r = 5;
+      ctx.fillStyle = '#9aa3b2';
+      ctx.strokeStyle = 'rgba(8,10,14,0.7)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // 城市（固定像素尺寸城郭图标 + 城名；坐标空间大、s 极小，不能按 s 缩放否则不可见）
+    const glyphPx = 13;
+    for (const cp of cfg.cityPoints) {
+      this.drawCityGlyph(this.px(cp.x), this.py(cp.y), glyphPx, cp.name);
     }
   }
 
@@ -593,7 +451,8 @@ export class MapRenderer {
       charGrid = charOnCurve(sc, g);
     } else {
       const c = currentCell(state);
-      charGrid = { x: c.x + 0.5, y: c.y + 0.5 };
+      // 向量模式：坐标空间已是真实坐标，不再偏移 0.5（0.5 是格子模型里「格→格心」的修正）
+      charGrid = this.vectorMode ? { x: c.x, y: c.y } : { x: c.x + 0.5, y: c.y + 0.5 };
     }
 
     const cx = this.px(charGrid.x);
@@ -723,6 +582,10 @@ export class MapRenderer {
 
   private drawDebugGrid(cfg: GameConfig): void {
     const ctx = this.ctx;
+    if (this.vectorMode) {
+      this.drawDebugGridVector(cfg);
+      return;
+    }
     ctx.strokeStyle = 'rgba(255,80,80,0.22)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -744,6 +607,32 @@ export class MapRenderer {
     };
     for (const n of cfg.nodes) for (const c of n.cells) dot(c.x, c.y);
     for (const r of cfg.roads) dot(r.cell.x, r.cell.y);
+  }
+
+  /** 向量模式调试网格：坐标空间网格 + 城市/拐点锚点 */
+  private drawDebugGridVector(cfg: GameConfig): void {
+    const ctx = this.ctx;
+    const step = 50;
+    ctx.strokeStyle = 'rgba(255,80,80,0.18)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x <= this.mapW; x += step) {
+      ctx.moveTo(Math.round(this.px(x)) + 0.5, this.py(0));
+      ctx.lineTo(Math.round(this.px(x)) + 0.5, this.py(this.mapH));
+    }
+    for (let y = 0; y <= this.mapH; y += step) {
+      ctx.moveTo(this.px(0), Math.round(this.py(y)) + 0.5);
+      ctx.lineTo(this.px(this.mapW), Math.round(this.py(y)) + 0.5);
+    }
+    ctx.stroke();
+    const dot = (x: number, y: number, col: string, rad: number) => {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(this.px(x), this.py(y), rad, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    for (const cp of cfg.cityPoints) dot(cp.x, cp.y, 'rgba(80,200,120,0.9)', 4);
+    for (const w of cfg.waypoints) dot(w.x, w.y, 'rgba(255,180,80,0.9)', 3);
   }
 
   // ───────────────────────── 工具 ─────────────────────────
@@ -770,7 +659,17 @@ export class MapRenderer {
   private getSmooth(path: Cell[]): SmoothCurve {
     let sc = this.pathCache.get(path);
     if (!sc) {
-      sc = smoothPath(path);
+      // 向量模式：路径已是坐标空间几何折线，直接复用（index 标签供 splitCurve 按进度取点）
+      if (this.vectorMode) {
+        sc = { pts: path.map((c) => ({ x: c.x, y: c.y })), labels: path.map((_, i) => i) };
+      } else if (this.straightMode) {
+        sc = {
+          pts: path.map((c) => ({ x: c.x + 0.5, y: c.y + 0.5 })),
+          labels: path.map((_, i) => i),
+        };
+      } else {
+        sc = smoothPath(path);
+      }
       if (this.pathCache.size > 32) this.pathCache.clear();
       this.pathCache.set(path, sc);
     }
@@ -785,56 +684,6 @@ export class MapRenderer {
 
 // ════════════════════ 模块级纯函数（噪声 / 平滑 / 几何） ════════════════════
 
-const DIRS: ReadonlyArray<[number, number]> = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-];
-
-function clamp255(v: number): number {
-  return Math.max(0, Math.min(255, Math.round(v)));
-}
-
-function hash2(x: number, y: number): number {
-  let n = (x * 374761393 + y * 668265263) | 0;
-  n = (n ^ (n >> 13)) * 1274126177;
-  return ((n ^ (n >> 16)) >>> 0) / 4294967295;
-}
-
-function vnoise(x: number, y: number): number {
-  const xi = Math.floor(x);
-  const yi = Math.floor(y);
-  const xf = x - xi;
-  const yf = y - yi;
-  const u = xf * xf * (3 - 2 * xf);
-  const v = yf * yf * (3 - 2 * yf);
-  const a = hash2(xi, yi);
-  const b = hash2(xi + 1, yi);
-  const c = hash2(xi, yi + 1);
-  const d = hash2(xi + 1, yi + 1);
-  return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
-}
-
-function fbm(x: number, y: number): number {
-  let sum = 0;
-  let amp = 0.5;
-  let f = 1;
-  for (let i = 0; i < 4; i++) {
-    sum += vnoise(x * f, y * f) * amp;
-    f *= 2;
-    amp *= 0.5;
-  }
-  return sum;
-}
-
-/** domain warp：采样前加低频噪声位移（fbm 2~3 octave） */
-function warp(x: number, y: number, amt: number): [number, number] {
-  return [
-    x + (fbm(x * BLOCK.warpFreq, y * BLOCK.warpFreq) - 0.5) * amt,
-    y + (fbm(x * BLOCK.warpFreq + 37, y * BLOCK.warpFreq + 53) - 0.5) * amt,
-  ];
-}
 
 /** 节点外接矩形中心（格坐标）：1 格 → 格心；2×2 → 块心 */
 export function nodeGridCenter(node: MapNodeDef): Pt {
@@ -987,6 +836,14 @@ function splitCurve(sc: SmoothCurve, g: number): { k: number; bx: number; by: nu
   while (k < labels.length - 1 && labels[k + 1] <= g) k++;
   const frac = labels[k + 1] > labels[k] ? (g - labels[k]) / (labels[k + 1] - labels[k]) : 0;
   return { k, bx: pts[k].x + (pts[k + 1].x - pts[k].x) * frac, by: pts[k].y + (pts[k + 1].y - pts[k].y) * frac };
+}
+
+/** 确定性伪随机哈希 → [0,1)（程序化背景云纹光斑定位，需稳定不随帧闪烁） */
+function hash2(a: number, b: number): number {
+  let h = (Math.imul(a, 374761393) + Math.imul(b, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = h ^ (h >>> 16);
+  return (h >>> 0) / 4294967295;
 }
 
 

@@ -1,5 +1,5 @@
 import { loadGameConfig } from './config/loader';
-import { buildGraph, type Graph } from './game/graph';
+import { buildVGraph, type VGraph } from './game/vgraph';
 import { buildTaskIndex, type TaskIndex } from './game/taskGen';
 import { createInitialState, ensureRuntimeFields, normalizeSlots, pushLog, storageItemCount } from './game/state';
 import { syncPhase, tick, type TickCtx } from './game/tick';
@@ -21,6 +21,7 @@ import {
   renderTaskbar,
   renderTopStats,
   relView,
+  charView,
   floatReward,
   toast,
 } from './ui/panels';
@@ -50,9 +51,14 @@ async function boot(): Promise<void> {
   }
 
   bootText.textContent = '正在构建路网…';
-  const graph: Graph = buildGraph(cfg);
+  // 坐标模式：向量图是唯一路径（xlsx 直出城市坐标 + 连线）
+  const vgraph = buildVGraph(cfg);
+  if (!vgraph) {
+    bootText.textContent = '地图构建失败：缺少城市坐标或连线，请检查 xlsx 的 city / cityLink 表';
+    return;
+  }
   const taskIndex: TaskIndex = buildTaskIndex(cfg);
-  const ctx: TickCtx = { cfg, graph, taskIndex };
+  const ctx: TickCtx = { cfg, graph: undefined, vgraph, taskIndex };
 
   // 存档只要不是当前配置的（含没有 cfgKey 的老存档），直接删除并重开，不做兼容迁移
   const cfgKey = `${cfg.meta.setName}_V${cfg.meta.version}`;
@@ -104,7 +110,8 @@ async function boot(): Promise<void> {
 
   // ── 界面装配 ──
   const renderer = new MapRenderer(el<HTMLCanvasElement>('map'));
-  renderer.setMapSize(graph.bounds.w, graph.bounds.h); // 地图尺寸由配置推导
+  // 向量地图用坐标空间尺寸
+  renderer.setMapSize(cfg.mapBounds.w, cfg.mapBounds.h);
   renderer.fit();
 
   const board = new TaskBoard(el('task-board'), {
@@ -113,12 +120,12 @@ async function boot(): Promise<void> {
       const item = state.slots[from];
       if (!item || item.kind !== 'task') return;
       if (item.task.id === state.currentTaskId) return; // 队首锁定
-      const before = computeTotalSeconds(state, cfg, graph);
+      const before = computeTotalSeconds(state, cfg, vgraph);
       state.slots.splice(from, 1);
       state.slots.splice(to, 0, item);
       normalizeSlots(state); // 空槽始终留在队尾
       syncPhase(state, ctx);
-      const after = computeTotalSeconds(state, cfg, graph);
+      const after = computeTotalSeconds(state, cfg, vgraph);
       flashTotalDelta(Math.round((after - before) / 60));
       refreshUI();
     },
@@ -126,9 +133,9 @@ async function boot(): Promise<void> {
 
   el('meta-line').textContent =
     `${cfg.meta.setName} V${cfg.meta.version} · ${cfg.meta.file} · 生效表 ${cfg.meta.sheets.length} 张 · ` +
-    `${cfg.nodes.length} 节点 / ${cfg.roads.length} 道路格`;
+    `${cfg.cityPoints.length} 城市点 / ${cfg.roadLines.length} 道路`;
 
-  const checkResult = runSelfCheck(cfg, graph);
+  const checkResult = runSelfCheck(cfg, vgraph);
   renderCheck(el('check-body'), checkResult, warnings, cfg);
   if (!checkResult.ok) toast('路网自检存在偏差，请查看「配置与路网自检」', 8000);
   if (warnings.length) toast(`配置有 ${warnings.length} 条校验告警`, 6000);
@@ -221,11 +228,12 @@ async function boot(): Promise<void> {
           : kind === 'rel'
             ? '关系 / 人物'
             : '事件';
-    el('modal').classList.toggle('wide', kind === 'rel' || kind === 'event');
+    el('modal').classList.toggle('wide', kind === 'rel' || kind === 'event' || kind === 'char');
     if (kind === 'rel') {
       relBadge = false;
       el('menu-rel').classList.remove('has-dot');
     }
+    if (kind === 'char') charView.tab = 'overview';
     if (kind === 'event') syncEventBadge();
     (el('modal-wrap') as HTMLElement).hidden = false;
     syncMenuActive();
@@ -285,6 +293,19 @@ async function boot(): Promise<void> {
   });
   modalBody.addEventListener('click', (ev) => {
     const t = ev.target as HTMLElement;
+    // 角色面板：子标签切换 + 概览快照下钻
+    const ct = t.closest('[data-char-tab]');
+    if (ct) {
+      charView.tab = (ct.getAttribute('data-char-tab') as typeof charView.tab) ?? 'overview';
+      renderModal(true);
+      return;
+    }
+    const cj = t.closest('[data-char-jump]');
+    if (cj) {
+      charView.tab = (cj.getAttribute('data-char-jump') as typeof charView.tab) ?? 'overview';
+      renderModal(true);
+      return;
+    }
     // 随机事件：选择后直接结算（无小游戏）
     const evAct = t.closest('[data-ev-act]');
     if (evAct) {
@@ -341,7 +362,7 @@ async function boot(): Promise<void> {
     renderTopStats(el('top-stats'), state, cfg, speed);
     renderModal();
     renderFeed(el('feed-body'), state);
-    board.update(state, cfg, graph);
+    board.update(state, cfg, vgraph);
     syncEventBadge();
     drainEvents();
   }
@@ -366,11 +387,11 @@ async function boot(): Promise<void> {
   }
 
   el('btn-autosort').addEventListener('click', () => {
-    const before = computeTotalSeconds(state, cfg, graph);
-    autoSort(state, cfg, graph);
+    const before = computeTotalSeconds(state, cfg, vgraph);
+    autoSort(state, cfg, vgraph);
     normalizeSlots(state);
     syncPhase(state, ctx);
-    const after = computeTotalSeconds(state, cfg, graph);
+    const after = computeTotalSeconds(state, cfg, vgraph);
     flashTotalDelta(Math.round((after - before) / 60));
     refreshUI();
     toast('已按最近邻重排（队首不动）');
@@ -421,7 +442,7 @@ async function boot(): Promise<void> {
     if (dt < 0) dt = 0;
     dt = Math.min(dt, OFFLINE_CAP_HOURS * 3600);
     if (leader.active && dt > 0) tick(state, dt * speed, ctx);
-    renderer.draw(cfg, graph, state, t);
+    renderer.draw(cfg, state, t);
     requestAnimationFrame(frame);
   }
 
@@ -459,7 +480,7 @@ async function boot(): Promise<void> {
         return state;
       },
       cfg,
-      graph,
+      vgraph,
       tick: (sec: number) => tick(state, sec, ctx),
     },
   });

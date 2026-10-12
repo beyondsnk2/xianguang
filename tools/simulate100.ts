@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readXlsx } from '../src/config/xlsxSource';
 import { parseWorkbook } from '../src/config/parse';
-import { buildGraph } from '../src/game/graph';
+import { buildVGraph } from '../src/game/vgraph';
 import { buildTaskIndex } from '../src/game/taskGen';
 import { createInitialState } from '../src/game/state';
 import { tick, type TickCtx } from '../src/game/tick';
@@ -89,7 +89,7 @@ function main(): void {
     const seed = BASE_SEED + i;
     const recorder = new TaskRecorder(i);
     const state = createInitialState(config, now, seed);
-    const ctx: TickCtx = { cfg: config, graph, taskIndex, recorder };
+    const ctx: TickCtx = { cfg: config, graph: undefined, vgraph, taskIndex, recorder };
 
     tick(state, 1e-9, ctx); // 触发 syncPhase：接取队首
     const steps = Math.floor((hours * 3600) / CHUNK_SEC);
