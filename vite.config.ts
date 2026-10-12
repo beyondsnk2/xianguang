@@ -160,7 +160,10 @@ function configPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [configPlugin()],
-  server: { port: 5173, open: false },
+  // host: true → 监听 0.0.0.0 + ::（IPv4/IPv6 双栈）。
+  // 本机 hosts 文件中 localhost 的 127.0.0.1 条目被注释，Node 默认只绑 ::1，
+  // 导致浏览器/代理走 127.0.0.1 访问失败，故必须显式全监听。
+  server: { port: 5173, host: true, open: false },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 1500,

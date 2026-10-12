@@ -6,6 +6,7 @@
   "description": "闲逛 · 三国题材地图挂机游戏 V1（纯前端）",
   "scripts": {
     "dev": "vite",
+    "dev:editor": "vite --open /editor.html",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
