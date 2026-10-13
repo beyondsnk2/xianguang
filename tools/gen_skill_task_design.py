@@ -15,7 +15,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-OUT = Path(r"I:/buddyWork/sanWalk/doc/V2/设计_V2技能与任务品质_设计表.xlsx")
+OUT = Path(r"E:/xianguang/doc/V2/设计_V2技能与任务品质_设计表.xlsx")
 
 HDR_FILL = PatternFill("solid", fgColor="FF4472C4")
 HDR_FONT = Font(name="Microsoft YaHei", size=10, bold=True, color="FFFFFFFF")

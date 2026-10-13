@@ -16,7 +16,7 @@ export const BG = {
   cloudAlpha: 0.16,
   /** 云纹光斑颜色 */
   cloudColor: 'rgba(210,205,180,1)',
-  /** 背景图压暗叠层（cover 铺满后叠加，保证上层可读） */
+  /** @deprecated 背景图浓度改由 config.bg1Opacity 控制（见 render/map.ts drawBgImage），此常量不再使用 */
   darken: 'rgba(10,12,8,0.35)',
   /** 晕影最深色 */
   vignette: 'rgba(8,10,6,0.5)',

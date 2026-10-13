@@ -16,7 +16,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-SRC = Path(r"I:/buddyWork/sanWalk/config/firstShow_V4.xlsx")
+SRC = Path(r"E:/xianguang/config/firstShow_V5.xlsx")
 
 HDR_FILL = PatternFill("solid", fgColor="FF4472C4")
 HDR_FONT = Font(name="Microsoft YaHei", size=10, bold=True, color="FFFFFFFF")

@@ -16,6 +16,7 @@ import {
   type Waypoint,
   type RoadLine,
   type MapBounds,
+  type Bg1Config,
   type RegionDef,
   type PriceRow,
   type Range,
@@ -174,9 +175,9 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     subOutput: asStr(r['subOutput']),
   })).filter((t) => t.tag);
 
-  // 点位表：新表名 mapPoint（含 type 列：city/waypoint）或旧表名 city（默认 city）。
+  // 点位表：mapPoint（含 type 列：city/waypoint；无 type 列默认 city）。
   // 统一读入后按 type 分流为城市（CityDef + CityPoint）与拐点（Waypoint），两者同命名空间。
-  const pointRows = tables['mapPoint'] ?? tables['city'] ?? [];
+  const pointRows = tables['mapPoint'] ?? [];
   const cities: CityDef[] = [];
   const cityPoints: CityPoint[] = [];
   const cityPointByTag: Record<string, CityPoint> = {};
@@ -187,7 +188,7 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     const x = asNum(r['x'], NaN);
     const y = asNum(r['y'], NaN);
     if (!tag || !name || !Number.isFinite(x) || !Number.isFinite(y)) continue;
-    const type = asStr(r['type']) || 'city'; // 旧 city 表无 type 列 → 默认 city
+    const type = asStr(r['type']) || 'city'; // 无 type 列 → 默认 city
     if (type === 'waypoint') {
       waypoints.push({ id: tag, tag, name, x, y });
     } else {
@@ -213,8 +214,8 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   for (const w of waypoints) pointByTag[w.tag] = w;
 
   // ── 向量地图层（坐标真相，直接由点位坐标 / 连线派生，无格子栅格化）──
-  // 道路折线：新表名 mapPointLink（tagA/tagB 可引用任意点位 tag）或旧表名 cityLink
-  const roadLines: RoadLine[] = (tables['mapPointLink'] ?? tables['cityLink'] ?? [])
+  // 道路折线：mapPointLink（tagA/tagB 可引用任意点位 tag）
+  const roadLines: RoadLine[] = (tables['mapPointLink'] ?? [])
     .map((r, i) => ({
       id: `rl${i + 1}`,
       refs: [asStr(r['tagA']), asStr(r['tagB'])] as [string, string],
@@ -250,8 +251,8 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   const cityTagOfName = (name: string): string | null =>
     cityByName[name]?.tag ?? (cityByTagEarly[name] ? name : null);
 
-  // 连线（连通唯一事实源）：新表名 mapPointLink（端点可引用任意点位 tag）或旧表名 cityLink；dist 运行时按坐标几何实时算
-  const links: CityLinkDef[] = (tables['mapPointLink'] ?? tables['cityLink'] ?? [])
+  // 连线（连通唯一事实源）：mapPointLink（端点可引用任意点位 tag）；dist 运行时按坐标几何实时算
+  const links: CityLinkDef[] = (tables['mapPointLink'] ?? [])
     .map((r) => ({
       tagA: asStr(r['tagA']),
       tagB: asStr(r['tagB']),
@@ -266,7 +267,7 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     const seen = new Set<string>();
     for (const l of links) {
       const k = l.tagA < l.tagB ? l.tagA + '|' + l.tagB : l.tagB + '|' + l.tagA;
-      if (seen.has(k)) warnings.push(`cityLink 重复：${l.tagA}-${l.tagB}`);
+      if (seen.has(k)) warnings.push(`mapPointLink 重复：${l.tagA}-${l.tagB}`);
       seen.add(k);
     }
   }
@@ -546,6 +547,19 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     values.initAttr[key] = parseRange(rawCfg[tag]) ?? { min: 2, max: 5 };
   }
 
+  // bg1 底图变换（config.bg1OffsetX/bg1OffsetY/bg1ScaleW/bg1ScaleH/bg1Opacity）。
+  // 缺列回落默认；非法值夹紧：缩放必须 > 0（否则夹回 1），浓度夹紧到 [0,1]。
+  const bg1ScaleW = asNum(rawCfg['bg1ScaleW'], 1);
+  const bg1ScaleH = asNum(rawCfg['bg1ScaleH'], 1);
+  const bg1Opacity = asNum(rawCfg['bg1Opacity'], 1);
+  const bg1: Bg1Config = {
+    offsetX: asNum(rawCfg['bg1OffsetX'], 0),
+    offsetY: asNum(rawCfg['bg1OffsetY'], 0),
+    scaleW: Number.isFinite(bg1ScaleW) && bg1ScaleW > 0 ? bg1ScaleW : 1,
+    scaleH: Number.isFinite(bg1ScaleH) && bg1ScaleH > 0 ? bg1ScaleH : 1,
+    opacity: Number.isFinite(bg1Opacity) ? Math.min(1, Math.max(0, bg1Opacity)) : 1,
+  };
+
   const taskByTag: Record<string, TaskDef> = {};
   for (const t of tasks) taskByTag[t.tag] = t;
   const cityByTag: Record<string, CityDef> = {};
@@ -567,6 +581,7 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     states,
     stateByTag,
     mapBgImg: asStr(rawCfg['mapBgImg']) || null,
+    bg1,
     // 向量地图层（坐标真相）：直接由 xlsx 城市坐标 / 连线派生，不再依赖格子栅格化或 ?pointmap 叠加。
     cityPoints,
     cityPointByTag,
@@ -618,6 +633,15 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   }
   for (const k of ['speed', 'backPackSlotNum', 'itemStacking', 'initTaskListSlot']) {
     if (!(k in rawCfg)) warnings.push(`config 表缺少 ${k}，已使用默认值`);
+  }
+  // bg1 底图参数：配了背景图才校验（无图时不生效）
+  if (config.mapBgImg) {
+    for (const k of ['bg1ScaleW', 'bg1ScaleH'] as const) {
+      const v = asNum(rawCfg[k], 1);
+      if (!(Number.isFinite(v) && v > 0)) warnings.push(`config.${k} 非法（应 > 0），已回落 1`);
+    }
+    const op = asNum(rawCfg['bg1Opacity'], 1);
+    if (Number.isFinite(op) && (op < 0 || op > 1)) warnings.push('config.bg1Opacity 超出 [0,1]，已夹紧');
   }
   if (!values.startCityRand.length) warnings.push('config.startCityRand 为空');
   for (const tag of values.startCityRand) {

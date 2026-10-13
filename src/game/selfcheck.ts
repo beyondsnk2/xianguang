@@ -130,8 +130,6 @@ export function runSelfCheck(cfg: GameConfig, vgraph: VGraph | null): CheckResul
   const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
   const same = dists.filter((x) => x.same).map((x) => x.d);
   const cross = dists.filter((x) => !x.same).map((x) => x.d);
-  const sameFac: number[] = [];
-  const crossFac: number[] = [];
   const maxDist = dists.length ? Math.max(...dists.map((x) => x.d)) : 0;
 
   return {

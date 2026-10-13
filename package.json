@@ -13,7 +13,6 @@
     "_bundle": "esbuild tools/check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/check.cjs --log-level=warning",
     "check": "npm run _bundle && node node_modules/.sanwalk/check.cjs",
     "check:v1": "npm run _bundle && node node_modules/.sanwalk/check.cjs firstShow@1",
-    "check:v2": "npm run _bundle && node node_modules/.sanwalk/check.cjs firstShow@2",
     "_bundle:calib": "esbuild tools/calib.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/calib.cjs --log-level=warning",
     "calib": "npm run _bundle:calib && node node_modules/.sanwalk/calib.cjs",
     "_bundle:roster": "esbuild tools/simRoster.ts --bundle --platform=node --format=cjs --outfile=node_modules/.sanwalk/roster.cjs --log-level=warning",

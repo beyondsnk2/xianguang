@@ -202,7 +202,7 @@ function settlePhase(state: GameState, ctx: TickCtx): void {
 
       // ── 随机事件·行为源①：到达新城市（内容设计 Q-C4：包含） ──
       if (task) {
-        const node = ctx.cfg.nodeByTag[task.nodeTag];
+        const node = task.nodeTag ? ctx.cfg.nodeByTag[task.nodeTag] : undefined;
         const cityTag = node?.belong ?? task.cityTag;
         if (cityTag && !state.visitedCities.includes(cityTag)) {
           state.visitedCities.push(cityTag);

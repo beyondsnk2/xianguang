@@ -5,7 +5,7 @@
 import json
 import openpyxl
 
-SRC = "config/firstShow_V4.xlsx"
+SRC = "config/firstShow_V5.xlsx"
 DEMAND = "tools/out/rareDemand.json"
 
 # 池结构（与 gen_v2_content.py RARE 表一致）

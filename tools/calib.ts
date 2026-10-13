@@ -14,7 +14,7 @@ import { resolve } from 'path';
 // 与 npm run check 同一套「最大版本」规则（曾硬编码 V3，升 V4 后校准跑错配置）
 const { config, picked } = loadConfig(process.argv[3]);
 console.log(`配置集：${picked.setName}  版本：V${picked.version}  文件：${picked.file}`);
-const graph = buildGraph(config);
+const vgraph = buildVGraph(config);
 
 const arg = process.argv[2];
 const days = arg ? arg.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0) : [1, 2, 3, 7, 14, 30, 60, 90, 120];

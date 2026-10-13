@@ -4,7 +4,7 @@
  *  2. 路网基准值对拍（开发文档 §7.1）
  *  3. 24 小时节奏模拟对拍（开发文档 §7.2）
  *
- * 运行：npm run check（同集最大版本，当前 V3）/ npm run check:v1（钉住 firstShow_V1）
+ * 运行：npm run check（同集最大版本，当前 V5）/ npm run check:v1（钉住 firstShow_V1）
  *       / npm run check <配置集>@<版本>（任意指定，如 firstShow@1）
  */
 import { buildVGraph, vdist } from '../src/game/vgraph';
@@ -86,39 +86,42 @@ function main(): void {
     console.log(`${it.ok ? '✅' : '❌'} ${it.label}：期望 ${it.expect} / 实际 ${it.actual}`);
   }
 
-  // ── cityLink 一致性（V3 起）：连通表 = 唯一事实源，必须与路网实测对齐 ──
+  // ── cityLink 一致性：连通表 = 唯一事实源，必须与向量路网实测对齐 ──
   if (config.links.length) {
     console.log(`\n── cityLink 一致性（${config.links.length} 条） ──`);
-    let linkBad = 0;
-    for (const l of config.links) {
-      const a = config.nodes.find((n) => n.name === 'city' && n.belong === l.tagA);
-      const b = config.nodes.find((n) => n.name === 'city' && n.belong === l.tagB);
-      if (!a || !b) {
-        console.log(`❌ ${l.tagA}-${l.tagB}：城节点缺失`);
-        linkBad++;
-        continue;
-      }
-      const d = nodeDistance(graph, a.tag, b.tag);
-      if (d === null) {
-        console.log(`❌ ${l.tagA}-${l.tagB}：路网不可达（配置声称连通）`);
-        linkBad++;
-      } else if (d !== l.dist) {
-        console.log(`❌ ${l.tagA}-${l.tagB}：dist 漂移，配置 ${l.dist} / 实测 ${d}`);
-        linkBad++;
-      }
-    }
-    if (linkBad) {
-      console.log(`❌ cityLink 有 ${linkBad} 条与路网不一致（重跑 tools/gen_map_v2.py 可同步）`);
-      process.exitCode = 1;
+    if (!vgraph) {
+      console.log('（无向量路网数据，跳过对拍）');
     } else {
-      console.log('✅ 全部 link 可达且 dist 与路网实测一致');
+      let linkBad = 0;
+      for (const l of config.links) {
+        if (!vgraph.nodes.has(l.tagA) || !vgraph.nodes.has(l.tagB)) {
+          console.log(`❌ ${l.tagA}-${l.tagB}：端点不在路网上（mapPoint/mapPointLink 缺行？）`);
+          linkBad++;
+          continue;
+        }
+        const d = vdist(vgraph, l.tagA, l.tagB);
+        if (d === null) {
+          console.log(`❌ ${l.tagA}-${l.tagB}：路网不可达（配置声称连通）`);
+          linkBad++;
+        } else if (typeof l.dist === 'number' && Number.isFinite(l.dist) && Math.abs(d - l.dist) > 0.5) {
+          // dist 已非配置必填（坐标模式下按几何实时计算）；只有表里还留着旧值时才对拍
+          console.log(`❌ ${l.tagA}-${l.tagB}：dist 漂移，配置 ${l.dist} / 实测 ${d.toFixed(2)}`);
+          linkBad++;
+        }
+      }
+      if (linkBad) {
+        console.log(`❌ cityLink 有 ${linkBad} 条与路网不一致（改坐标后在编辑器同步连线，或重跑 npm run gen:pointmap）`);
+        process.exitCode = 1;
+      } else {
+        console.log('✅ 全部 link 端点有效、可达，dist 与路网实测一致');
+      }
     }
   }
 
   const s = check.stats;
   console.log(
-    `\n图规模：${s.nodeCount} 点 ${s.edgeCount} 边（格 ${s.cellCount}），连通分量 ${s.components}，` +
-      `地图占地 ${graph.bounds.w}×${graph.bounds.h} 格`,
+    `\n图规模：${s.nodeCount} 点 ${s.edgeCount} 边，连通分量 ${s.components}，` +
+      `地图占地 ${vgraph ? `${vgraph.bounds.w.toFixed(1)}×${vgraph.bounds.h.toFixed(1)}` : '—'}`,
   );
   const doc = DOC_STATS[docKey(latest.setName, latest.version)] ?? DOC_STATS[latest.setName];
   const tag = (v: number | undefined) => (doc ? `（文档 ${v}）` : '');
@@ -194,7 +197,7 @@ function main(): void {
 
   console.log('\n── 离线结算 ──');
   for (const h of [1, 8, 24]) {
-    const r = offlineSettle(config, graph, h);
+    const r = offlineSettle(config, vgraph, h);
     console.log(
       `离开 ${h} 小时 → 结算 ${r.settledHours.toFixed(1)} 小时，完成 ${r.tasksDone} 个任务，` +
         `回城 ${r.returnTrips} 次，耗时 ${r.costMs} ms`,

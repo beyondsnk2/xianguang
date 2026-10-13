@@ -33,7 +33,7 @@ const CHECKPOINTS = (process.argv[2] || '24,48,96')
   .filter((n) => Number.isFinite(n) && n > 0)
   .sort((a, b) => a - b);
 
-const graph = buildGraph(config as GameConfig);
+const vgraph = buildVGraph(config as GameConfig);
 const taskIndex = buildTaskIndex(config as GameConfig);
 
 interface Snap {

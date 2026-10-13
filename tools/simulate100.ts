@@ -11,8 +11,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { readXlsx } from '../src/config/xlsxSource';
-import { parseWorkbook } from '../src/config/parse';
+import { loadConfig } from './pickConfig';
 import { buildVGraph } from '../src/game/vgraph';
 import { buildTaskIndex } from '../src/game/taskGen';
 import { createInitialState } from '../src/game/state';
@@ -20,7 +19,6 @@ import { tick, type TickCtx } from '../src/game/tick';
 import { TaskRecorder, type TaskRecord } from '../src/game/taskLog';
 import XLSX from 'xlsx';
 
-const CONFIG_FILE = 'firstShow_V3.xlsx';
 const CHUNK_SEC = 30;
 const BASE_SEED = 20261000;
 
@@ -66,15 +64,10 @@ function parseArgs(): Args {
 
 function main(): void {
   const { count, hours, out } = parseArgs();
-  const buf = fs.readFileSync(path.join(process.cwd(), 'config', CONFIG_FILE));
-  const sheets = readXlsx(new Uint8Array(buf));
-  const { config } = parseWorkbook(sheets, {
-    file: CONFIG_FILE,
-    setName: 'firstShow',
-    version: 3,
-    loadedAt: new Date().toISOString(),
-  });
-  const graph = buildGraph(config);
+  // 与 check/calib/roster 同规则：默认跑 config/ 下同配置集的最大版本（曾硬编码 V3，会跑错配置）
+  const { config, picked } = loadConfig();
+  console.log(`配置集：${picked.setName}  V${picked.version}  文件：${picked.file}`);
+  const vgraph = buildVGraph(config);
   const taskIndex = buildTaskIndex(config);
 
   const skillDefs = config.skillDefs;

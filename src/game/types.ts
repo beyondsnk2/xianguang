@@ -253,6 +253,25 @@ export interface MapBounds {
   h: number;
 }
 
+/**
+ * bg1 底图变换（config 表：bg1OffsetX / bg1OffsetY / bg1ScaleW / bg1ScaleH / bg1Opacity）。
+ * 基准矩形 = 全部点位（城市 + 拐点）包围盒；图像先按该矩形 cover 铺满，
+ * 再按 scaleW / scaleH 倍率围绕矩形中心缩放，最后按 offsetX / offsetY 整体平移。
+ * 几何实现为 shared/bgGeom.ts 的 bgImageRect()——游戏渲染与地图编辑器共用同一函数，
+ * 保证「编辑器所见 = 游戏所见」；该公式不允许在任何一侧重写。
+ * opacity 为浓度（0~1 小数）。缺列 / 非法值回落默认：offset 0、scale 1、opacity 1。
+ */
+export interface Bg1Config {
+  offsetX: number;
+  offsetY: number;
+  /** 宽缩放倍率（1 = cover 基准） */
+  scaleW: number;
+  /** 高缩放倍率（1 = cover 基准） */
+  scaleH: number;
+  /** 浓度（0~1） */
+  opacity: number;
+}
+
 export interface AttrLvRow {
   lv: number;
   num: number; // 本级升到下一级所需经验
@@ -366,6 +385,8 @@ export interface GameConfig {
   stateByTag: Record<string, StateDef>;
   /** config.mapBgImg：地图背景图（public/ 下文件名）；空串/null = 程序化占位底图 */
   mapBgImg: string | null;
+  /** config.bg1*：bg1 底图变换（偏移 / 缩放 / 浓度）；mapBgImg 为空时不生效 */
+  bg1: Bg1Config;
   // ── 向量地图层（V-Point）：城市/拐点/道路/区域基于离散坐标，非格子；缺省为空 → 走 xlsx 格子路径 ──
   /** 城市离散坐标点（tag 与 cities 对齐） */
   cityPoints: CityPoint[];

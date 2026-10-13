@@ -9,6 +9,7 @@ import {
   ROAD,
   SMOOTH,
 } from './mapStyle';
+import { bgImageRect } from '../shared/bgGeom';
 
 const DEBUG_GRID =
   typeof location !== 'undefined' && new URLSearchParams(location.search).has('debugGrid');
@@ -45,7 +46,7 @@ export class MapRenderer {
   /** L2 城际曲线（格坐标平滑折线，每帧按当前缩放描边） */
   private roadCurves: SmoothCurve[] = [];
 
-  /** L0 背景离屏层（按画布尺寸烘焙） */
+  /** L0 程序化占位离屏层（按画布尺寸烘焙；bg1 图可用时不走此路） */
   private bgCanvas: HTMLCanvasElement | null = null;
   private bgKey = '';
   private bgImg: HTMLImageElement | null = null;
@@ -173,7 +174,7 @@ export class MapRenderer {
     return curves;
   }
 
-  /** L0 背景：mapBgImg 有值 → 加载 cover 铺满 + 压暗；无/失败 → 程序化占位 */
+  /** L0 背景：mapBgImg 有值 → 加载 bg1 图（坐标空间按 config.bg1 变换绘制）；无/失败 → 程序化占位 */
   private loadBg(cfg: GameConfig): void {
     const name = cfg.mapBgImg ?? null;
     this.bgImgName = name;
@@ -200,7 +201,7 @@ export class MapRenderer {
     return `${this.w}x${this.h}:${this.bgImgName}:${this.bgLoaded}`;
   }
 
-  /** 烘焙背景到离屏（按当前画布尺寸） */
+  /** 烘焙程序化占位底图到离屏（按当前画布尺寸；bg1 图可用时不走此路，见 drawBgImage） */
   private bakeBg(): void {
     const w = this.w;
     const h = this.h;
@@ -208,53 +209,64 @@ export class MapRenderer {
     oc.width = w;
     oc.height = h;
     const c = oc.getContext('2d')!;
-    if (this.bgLoaded && this.bgImg) {
-      // cover 铺满
-      const iw = this.bgImg.width;
-      const ih = this.bgImg.height;
-      const scale = Math.max(w / iw, h / ih);
-      const dw = iw * scale;
-      const dh = ih * scale;
-      c.drawImage(this.bgImg, (w - dw) / 2, (h - dh) / 2, dw, dh);
-      c.fillStyle = BG.darken;
-      c.fillRect(0, 0, w, h);
-    } else {
-      // 程序化占位：暗色渐变 + 云纹 + 晕影
-      const g = c.createLinearGradient(0, 0, w, h);
-      g.addColorStop(0, BG.gradient[0]);
-      g.addColorStop(0.5, BG.gradient[1]);
-      g.addColorStop(1, BG.gradient[2]);
-      c.fillStyle = g;
-      c.fillRect(0, 0, w, h);
-      c.globalAlpha = BG.cloudAlpha;
-      for (let i = 0; i < BG.cloudSpots; i++) {
-        const x = hash2(i, 7) * w;
-        const y = hash2(i, 13) * h;
-        const r = (60 + hash2(i, 29) * 160) * Math.max(1, w / 1200);
-        const rg = c.createRadialGradient(x, y, 0, x, y, r);
-        rg.addColorStop(0, BG.cloudColor);
-        rg.addColorStop(1, 'rgba(210,205,180,0)');
-        c.fillStyle = rg;
-        c.beginPath();
-        c.arc(x, y, r, 0, Math.PI * 2);
-        c.fill();
-      }
-      c.globalAlpha = 1;
-      const v = c.createRadialGradient(
-        w / 2,
-        h / 2,
-        Math.min(w, h) * 0.3,
-        w / 2,
-        h / 2,
-        Math.max(w, h) * 0.75,
-      );
-      v.addColorStop(0, 'rgba(0,0,0,0)');
-      v.addColorStop(1, BG.vignette);
-      c.fillStyle = v;
-      c.fillRect(0, 0, w, h);
+    // 程序化占位：暗色渐变 + 云纹 + 晕影
+    const g = c.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, BG.gradient[0]);
+    g.addColorStop(0.5, BG.gradient[1]);
+    g.addColorStop(1, BG.gradient[2]);
+    c.fillStyle = g;
+    c.fillRect(0, 0, w, h);
+    c.globalAlpha = BG.cloudAlpha;
+    for (let i = 0; i < BG.cloudSpots; i++) {
+      const x = hash2(i, 7) * w;
+      const y = hash2(i, 13) * h;
+      const r = (60 + hash2(i, 29) * 160) * Math.max(1, w / 1200);
+      const rg = c.createRadialGradient(x, y, 0, x, y, r);
+      rg.addColorStop(0, BG.cloudColor);
+      rg.addColorStop(1, 'rgba(210,205,180,0)');
+      c.fillStyle = rg;
+      c.beginPath();
+      c.arc(x, y, r, 0, Math.PI * 2);
+      c.fill();
     }
+    c.globalAlpha = 1;
+    const v = c.createRadialGradient(
+      w / 2,
+      h / 2,
+      Math.min(w, h) * 0.3,
+      w / 2,
+      h / 2,
+      Math.max(w, h) * 0.75,
+    );
+    v.addColorStop(0, 'rgba(0,0,0,0)');
+    v.addColorStop(1, BG.vignette);
+    c.fillStyle = v;
+    c.fillRect(0, 0, w, h);
     this.bgCanvas = oc;
     this.bgKey = this.bgKeyNow();
+  }
+
+  /**
+   * bg1 底图变换（config.bg1*）→ 坐标空间矩形。
+   * 几何逻辑唯一真相在 shared/bgGeom.ts（与地图编辑器共用，保证「编辑器所见 = 游戏所见」）：
+   * 基准 = 全部点位（城市 + 拐点）包围盒；图像按基准矩形 cover 铺满 →
+   * 按 scaleW/scaleH 围绕基准中心缩放 → 按 offsetX/offsetY 平移。
+   */
+  private bgRect(cfg: GameConfig, img: HTMLImageElement): { x: number; y: number; w: number; h: number } | null {
+    return bgImageRect(cfg.bg1, [...cfg.cityPoints, ...cfg.waypoints], img.width, img.height);
+  }
+
+  /** L0 bg1 底图：坐标空间直接绘制（随视图平移/缩放），浓度取 config.bg1.opacity */
+  private drawBgImage(cfg: GameConfig): void {
+    const img = this.bgImg;
+    if (!img) return;
+    const r = this.bgRect(cfg, img);
+    if (!r) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, Math.max(0, cfg.bg1.opacity));
+    ctx.drawImage(img, this.px(r.x), this.py(r.y), r.w * this.s, r.h * this.s);
+    ctx.restore();
   }
 
   // ───────────────────────── 主绘制 ─────────────────────────
@@ -264,15 +276,16 @@ export class MapRenderer {
     const s = this.s;
     this.ensureBaked(cfg);
 
-    if (!this.bgCanvas || this.bgKey !== this.bgKeyNow()) {
-      this.bakeBg();
-    }
-
     ctx.save();
     ctx.clearRect(0, 0, this.w, this.h);
 
-    // L0 背景
-    if (this.bgCanvas) ctx.drawImage(this.bgCanvas, 0, 0, this.w, this.h);
+    // L0 背景：bg1 底图（坐标空间，随视图平移/缩放）优先；无图/加载失败 → 程序化占位（画布空间烘焙）
+    if (this.bgLoaded && this.bgImg) {
+      this.drawBgImage(cfg);
+    } else {
+      if (!this.bgCanvas || this.bgKey !== this.bgKeyNow()) this.bakeBg();
+      if (this.bgCanvas) ctx.drawImage(this.bgCanvas, 0, 0, this.w, this.h);
+    }
 
     // L1 城块色斑（缩放平滑放大 → 有机边界）
     if (this.blockCanvas) {

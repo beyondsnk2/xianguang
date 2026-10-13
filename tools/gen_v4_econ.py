@@ -27,7 +27,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-SRC = Path(r"I:/buddyWork/sanWalk/config/firstShow_V4.xlsx")
+SRC = Path(r"E:/xianguang/config/firstShow_V5.xlsx")
 
 # ── 第 ① 层：材料 tier 骨架（三阶当量 1/3/9；段内 +1/+2）──
 MAT_BASE_DEFAULT = {1: 3, 2: 4, 3: 5, 4: 9, 5: 11, 6: 13, 7: 27, 8: 32, 9: 38}

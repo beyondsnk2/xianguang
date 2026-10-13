@@ -8,7 +8,7 @@ import { buildVGraph } from '../src/game/vgraph';
 import { simulate } from '../src/game/selfcheck';
 
 const { config, picked } = loadConfig(process.argv[3]);
-const graph = buildGraph(config);
+const vgraph = buildVGraph(config);
 console.log(`配置集：${picked.setName}  V${picked.version}`);
 
 // 节点门槛（与 constants.ts 同源，仅用于打印对照）

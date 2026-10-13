@@ -1,5 +1,5 @@
 import { loadGameConfig } from './config/loader';
-import { buildVGraph, type VGraph } from './game/vgraph';
+import { buildVGraph } from './game/vgraph';
 import { buildTaskIndex, type TaskIndex } from './game/taskGen';
 import { createInitialState, ensureRuntimeFields, normalizeSlots, pushLog, storageItemCount } from './game/state';
 import { syncPhase, tick, type TickCtx } from './game/tick';
@@ -54,7 +54,7 @@ async function boot(): Promise<void> {
   // 坐标模式：向量图是唯一路径（xlsx 直出城市坐标 + 连线）
   const vgraph = buildVGraph(cfg);
   if (!vgraph) {
-    bootText.textContent = '地图构建失败：缺少城市坐标或连线，请检查 xlsx 的 city / cityLink 表';
+    bootText.textContent = '地图构建失败：缺少城市坐标或连线，请检查 xlsx 的 mapPoint / mapPointLink 表';
     return;
   }
   const taskIndex: TaskIndex = buildTaskIndex(cfg);

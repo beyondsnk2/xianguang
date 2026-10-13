@@ -1,8 +1,8 @@
 /**
  * 坐标模式：从真实 xlsx 配置直读「坐标点 MapModel」。
- *  - 城市：直接取 xlsx city 表的 x/y 离散坐标（坐标真相，不再反推格子块中心）
+ *  - 城市：直接取 xlsx mapPoint 表的 x/y 离散坐标（坐标真相，不再反推格子块中心）
  *  - 州：straight 复制（含 #RRGGBB 着色）
- *  - cityLink：每条转成一条 pointRefs=[tagA,tagB] 的道路
+ *  - mapPointLink：每条转成一条 pointRefs=[tagA,tagB] 的道路
  *
  * 运行：npm run gen:pointmap    （产物 config/point-map.json）
  * 旧 demo 若仍在，自动备份为 config/point-map-demo.json
@@ -36,7 +36,7 @@ export function generatePointMap(opts: { configDir?: string } = {}): void {
     color: s.color,
   }));
 
-  // ── 3. cityLink → 道路（直接引用城市 tag）──
+  // ── 3. mapPointLink → 道路（直接引用点位 tag）──
   const roads: PointRoad[] = config.links.map((l, i) => ({
     id: `r${i + 1}`,
     pointRefs: [l.tagA, l.tagB],
