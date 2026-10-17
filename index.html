@@ -50,13 +50,25 @@
               <span class="mi-dot count" hidden></span>
             </button>
           </nav>
+          <div id="city-tip" hidden></div>
+          <div id="city-pop" hidden>
+            <div class="cp-head">
+              <span class="cp-title">
+                <span class="cp-name" id="city-pop-name">—</span>
+                <span class="cp-state" id="city-pop-state" hidden></span>
+                <span class="cp-badge" id="city-pop-badge" hidden></span>
+              </span>
+              <button class="mini cp-close" id="city-pop-close" title="关闭">✕</button>
+            </div>
+            <div class="cp-body" id="city-pop-body"></div>
+          </div>
           <div class="map-overlay">
             <div class="map-tools">
               <button class="mini" id="btn-fit" title="适配窗口">适配</button>
               <button class="mini" id="btn-zoomin">＋</button>
               <button class="mini" id="btn-zoomout">－</button>
             </div>
-            <div class="map-hint">滚轮缩放 · 拖动平移</div>
+            <div class="map-hint">滚轮缩放 · 拖动平移 · 悬停/点击城市看详情</div>
           </div>
         </section>
 

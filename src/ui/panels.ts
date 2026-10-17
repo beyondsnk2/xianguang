@@ -77,17 +77,12 @@ export function renderTaskbar(root: HTMLElement, state: GameState, cfg: GameConf
   let remain = 0;
   let total = 0;
 
-  if (p.kind === 'moving' || p.kind === 'returning') {
-    const slot = state.slots.find((s) => s.kind === 'task' && s.task.id === (p.kind === 'moving' ? p.taskId : null));
-    if (p.kind === 'moving') {
-      name = '赶路';
-      const task = slot && slot.kind === 'task' ? slot.task : null;
-      const def = task ? cfg.taskByTag[task.taskTag] : null;
-      target = task ? `前往 ${cfg.cityByTag[task.cityTag]?.name ?? ''}·${def?.nodeName ?? ''} ${def?.name ?? ''}` : '';
-    } else {
-      name = '回城存仓';
-      target = '背包已满，返回最近州府';
-    }
+  if (p.kind === 'moving') {
+    name = '赶路';
+    const slot = state.slots.find((s) => s.kind === 'task' && s.task.id === p.taskId);
+    const task = slot && slot.kind === 'task' ? slot.task : null;
+    const def = task ? cfg.taskByTag[task.taskTag] : null;
+    target = task ? `前往 ${cfg.cityByTag[task.cityTag]?.name ?? ''}·${def?.nodeName ?? ''} ${def?.name ?? ''}` : '';
     remain = p.remain;
     total = p.total;
   } else if (p.kind === 'working') {
@@ -112,7 +107,7 @@ export function renderTaskbar(root: HTMLElement, state: GameState, cfg: GameConf
   if (remainEl) {
     remainEl.textContent =
       total > 0
-        ? `剩余 ${fmtDur(remain)}` + (state.phase.kind === 'moving' ? ` · ${Math.ceil(remain / cfg.values.speed)} 格` : '')
+        ? `剩余 ${fmtDur(remain)}` + (state.phase.kind === 'moving' ? ` · ${Math.ceil(remain / cfg.values.speed)} 单位` : '')
         : '—';
   }
   if (barEl) barEl.style.width = `${pct}%`;
@@ -241,7 +236,7 @@ function renderCharOverview(state: GameState, cfg: GameConfig): string {
 
   const ambLabel = AMBITION_LABELS[state.ambition] ?? state.ambition;
   const paceLabel = PACE_LABELS[state.pace] ?? state.pace;
-  const statLine = `完成 ${state.stats.tasksDone} · 回城 ${state.stats.returnTrips} 次 · 行走 ${state.stats.cellsWalked} 格`;
+  const statLine = `完成 ${state.stats.tasksDone} · 入仓 ${state.stats.deposits} 次 · 行走 ${state.stats.distanceWalked} 单位`;
 
   return (
     `<div class="char-snap">` +
@@ -789,7 +784,7 @@ export function renderCheck(root: HTMLElement, result: CheckResult, warnings: st
   root.innerHTML =
     items +
     `<div class="kv" style="margin-top:6px"><span>图规模</span><b>${s.nodeCount} 点 ${s.edgeCount} 边</b></div>` +
-    `<div class="kv"><span>平均路程</span><b>${s.avgAll.toFixed(2)} 格（最大 ${s.maxDist}）</b></div>` +
+    `<div class="kv"><span>平均路程</span><b>${s.avgAll.toFixed(2)} 单位（最大 ${s.maxDist}）</b></div>` +
     `<div class="kv"><span>配置</span><b>${cfg.meta.file} · V${cfg.meta.version}</b></div>` +
     (warnings.length ? `<div class="warn">${warnings.join('<br>')}</div>` : '');
 }

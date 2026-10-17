@@ -7,10 +7,8 @@ import {
   SKILL_XP_PER_QUALITY,
   WAGE_RATIO,
 } from './constants';
-import type { Graph } from './graph';
-import { pathToNearestCity, pathToNode } from './graph';
 import type { VGraph } from './vgraph';
-import { vpathFromPoint, vpathToNearestCity } from './vgraph';
+import { vpathFromPoint } from './vgraph';
 import type { TaskIndex } from './taskGen';
 import { genTask } from './taskGen';
 import { rollRange } from './rng';
@@ -28,8 +26,6 @@ import { tierPrice } from './economy';
 
 export interface TickCtx {
   cfg: GameConfig;
-  /** 格子图（坐标模式下已退役，通常为空图；仅作历史兼容占位，运行时一律走 vgraph） */
-  graph?: Graph;
   /** 向量地图图（坐标模式唯一路径，恒非空） */
   vgraph?: VGraph | null;
   taskIndex: TaskIndex;
@@ -49,7 +45,7 @@ export function tick(state: GameState, dt: number, ctx: TickCtx): void {
   state.simNow += dt * 1000;
   // ── 随机事件：时间源仅「赶路」阶段累积 + 过期只在线发生（离线冻结） ──
   if (ctx.online) {
-    // 时间源事件点只在赶路(moving)时累积；working / 回城 / 空闲阶段不累积（行为源不受影响）
+    // 时间源事件点只在赶路(moving)时累积；working / 空闲阶段不累积（行为源不受影响）
     if (state.phase.kind === 'moving') advanceEventClock(state, ctx.cfg, dt);
     expireEvents(state);
   }
@@ -147,7 +143,7 @@ export function syncPhase(state: GameState, ctx: TickCtx): void {
   const slot = state.slots[idx];
   if (slot.kind !== 'task') return;
 
-  // 向量地图（?pointmap）：沿几何折线从当前坐标移动到任务所在城市；否则走格子图
+  // 向量地图（坐标模式）：沿几何折线从当前坐标移动到任务所在城市
   if (ctx.vgraph) {
     const vp = vpathFromPoint(ctx.vgraph, state.cell, slot.task.cityTag);
     if (!vp) {
@@ -160,25 +156,8 @@ export function syncPhase(state: GameState, ctx: TickCtx): void {
     return;
   }
 
-  // 格子回退分支（坐标模式退役，ctx.graph 可能为空 → 直接出列）
-  if (!ctx.graph) {
-    retireSlot(state, idx);
-    return;
-  }
-  const nodeTag = slot.task.nodeTag;
-  if (nodeTag === null) {
-    retireSlot(state, idx);
-    return;
-  }
-  const path = pathToNode(ctx.graph, state.cell, nodeTag);
-  if (!path) {
-    // 不可达（配置异常）：该任务出列，空槽落到队尾重新补位
-    retireSlot(state, idx);
-    return;
-  }
-  state.currentTaskId = slot.task.id;
-  const total = path.cost * ctx.cfg.values.speed;
-  state.phase = { kind: 'moving', taskId: slot.task.id, path: path.cells, total, remain: total };
+  // 无向量图（配置缺城市坐标/连线）：任务直接出列，空槽落到队尾重新补位
+  retireSlot(state, idx);
 }
 
 function settlePhase(state: GameState, ctx: TickCtx): void {
@@ -190,20 +169,17 @@ function settlePhase(state: GameState, ctx: TickCtx): void {
     case 'moving': {
       const last = phase.path[phase.path.length - 1];
       if (last) state.cell = { ...last };
-      // 向量模式：路程以欧氏距离计；格子模式：以格数计
-      state.stats.cellsWalked += ctx.vgraph
-        ? Math.max(0, phase.total / Math.max(1e-6, ctx.cfg.values.speed))
-        : Math.max(0, phase.path.length - 1);
+      // 路程以欧氏距离计（total = 距离 × speed，除回去即距离单位）
+      state.stats.distanceWalked += Math.max(0, phase.total / Math.max(1e-6, ctx.cfg.values.speed));
       const slot = state.slots.find((s) => s.kind === 'task' && s.task.id === phase.taskId);
       const task = slot && slot.kind === 'task' ? slot.task : null;
       const needTime = task ? task.needTime : 60;
       const def = task ? ctx.cfg.taskByTag[task.taskTag] : null;
-      ctx.recorder?.noteTravel(phase.taskId, phase.total); // 赶路耗时（秒）= 路程格数 × speed
+      ctx.recorder?.noteTravel(phase.taskId, phase.total); // 赶路耗时（秒）= 路程（距离单位）× speed
 
       // ── 随机事件·行为源①：到达新城市（内容设计 Q-C4：包含） ──
       if (task) {
-        const node = task.nodeTag ? ctx.cfg.nodeByTag[task.nodeTag] : undefined;
-        const cityTag = node?.belong ?? task.cityTag;
+        const cityTag = task.cityTag;
         if (cityTag && !state.visitedCities.includes(cityTag)) {
           state.visitedCities.push(cityTag);
           tryTriggerEvent(state, { cfg: ctx.cfg, cityTag, facility: def?.nodeType });
@@ -223,19 +199,10 @@ function settlePhase(state: GameState, ctx: TickCtx): void {
     case 'working':
       settleTask(state, ctx, phase.taskId);
       break;
-
-    case 'returning': {
-      const last = phase.path[phase.path.length - 1];
-      if (last) state.cell = { ...last };
-      depositAll(state);
-      state.phase = { kind: 'idle' };
-      syncPhase(state, ctx);
-      break;
-    }
   }
 }
 
-/** 结算一个任务：发道具 + 属性经验 → 释放槽（进入 180 s 补位）→ 超容则自动回城 */
+/** 结算一个任务：发道具 + 属性经验 → 释放槽（进入 180 s 补位）→ 超容则自动入仓 */
 function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
   const slotIdx = state.slots.findIndex((s) => s.kind === 'task' && s.task.id === taskId);
   if (slotIdx < 0) {
@@ -334,25 +301,9 @@ function settleTask(state: GameState, ctx: TickCtx, taskId: number): void {
   state.currentTaskId = null;
   state.phase = { kind: 'idle' };
 
-  // 超容 → 自动插入「回最近州府 → 全部入仓 → 清空背包」，全程无需点击
+  // 超容 → 自动「全部入仓 → 清空背包」（仓库全局共享，角色完成任务即身在城中，无需再跑一趟）
   if (bagSlotsUsed(state, ctx.cfg) > ctx.cfg.values.backPackSlotNum) {
-    if (ctx.vgraph) {
-      const vr = vpathToNearestCity(ctx.vgraph, state.cell);
-      if (vr) {
-        const total = vr.cost * ctx.cfg.values.speed;
-        state.phase = { kind: 'returning', path: vr.points, total, remain: total };
-        pushLog(state, '背包已满，返回州府存仓');
-        return;
-      }
-    } else if (ctx.graph) {
-      const near = pathToNearestCity(ctx.graph, state.cell);
-      if (near) {
-        const total = near.path.cost * ctx.cfg.values.speed;
-        state.phase = { kind: 'returning', path: near.path.cells, total, remain: total };
-        pushLog(state, '背包已满，返回州府存仓');
-        return;
-      }
-    }
+    depositAll(state);
   }
   syncPhase(state, ctx);
 }
@@ -366,13 +317,13 @@ function depositAll(state: GameState): void {
     n += v;
     delete state.bag[k];
   }
-  state.stats.returnTrips += 1;
+  state.stats.deposits += 1;
   pushLog(state, `存入仓库 ${n} 件，背包已清空`);
 }
 
-/** 当前所在格（渲染用）：由 phase 推导，绝不用帧累加 */
+/** 当前位置（渲染用）：由 phase 推导，绝不用帧累加 */
 export function currentCell(state: GameState): Cell {
-  if (state.phase.kind === 'moving' || state.phase.kind === 'returning') {
+  if (state.phase.kind === 'moving') {
     const p = state.phase.path;
     const total = Math.max(1e-9, state.phase.total);
     const progress = Math.min(1, Math.max(0, 1 - state.phase.remain / total));
@@ -381,7 +332,7 @@ export function currentCell(state: GameState): Cell {
   return state.cell;
 }
 
-/** 沿格子序列插值（零成本的内部移动也按等分铺开，保证视觉不跳变） */
+/** 沿路径折线插值（零成本的内部移动也按等分铺开，保证视觉不跳变） */
 export function pointOnPath(path: Cell[], progress: number): Cell | null {
   if (!path.length) return null;
   if (path.length === 1) return path[0];

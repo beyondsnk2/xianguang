@@ -82,7 +82,7 @@ function main(): void {
     const seed = BASE_SEED + i;
     const recorder = new TaskRecorder(i);
     const state = createInitialState(config, now, seed);
-    const ctx: TickCtx = { cfg: config, graph: undefined, vgraph, taskIndex, recorder };
+    const ctx: TickCtx = { cfg: config, vgraph, taskIndex, recorder };
 
     tick(state, 1e-9, ctx); // 触发 syncPhase：接取队首
     const steps = Math.floor((hours * 3600) / CHUNK_SEC);
@@ -97,8 +97,8 @@ function main(): void {
     };
     for (const s of skillDefs) row[`技能·${s.name}`] = state.skills[s.tag]?.lv ?? 0;
     row.完成任务 = state.stats.tasksDone;
-    row.回城次数 = state.stats.returnTrips;
-    row.累计走格 = state.stats.cellsWalked;
+    row.入仓次数 = state.stats.deposits;
+    row.累计行程 = state.stats.distanceWalked;
     row.好感 = state.favor;
     row.图纸数 = state.blueprints.length;
     row.缺料停产 = state.stats.starvedTasks;

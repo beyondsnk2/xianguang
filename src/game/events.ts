@@ -14,7 +14,7 @@ import type { GameState } from './types';
 export type EventRarity = 0 | 1 | 2;
 
 export type EventKind =
-  | 'task' // 任务完成 / 赶路 / 回城
+  | 'task' // 任务完成 / 赶路
   | 'meet' // 初识偶遇
   | 'favor' // 关系升阶
   | 'blueprint' // 习得图纸

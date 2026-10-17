@@ -2,6 +2,10 @@
 import type { GameEvent } from './events';
 import type { PendingEvent } from './event';
 
+/**
+ * 坐标点。向量模式下就是坐标空间浮点（城市/拐点/折线点/角色位置共用），
+ * 历史上的「格子」语义已退役；字段名保留是为避免几百处引用改名。
+ */
 export interface Cell {
   x: number;
   y: number;
@@ -183,26 +187,10 @@ export interface StateDef {
   color: string; // #RRGGBB，城块色
 }
 
-export interface MapNodeDef {
-  tag: number; // 1–16，数字
-  name: string; // city / barrack / market …
-  cells: Cell[]; // 1 格或 2×2=4 格
-  belong: string | null; // city.tag（英文）
-}
-
-export interface MapRoadDef {
-  tag: number;
-  name: string;
-  cell: Cell;
-  roadType: string; // plain（预留 mountain / forest / official）
-}
-
-/** 城际连通（cityLink 表）：连通唯一事实源。dist 不再由配置写入（运行时按坐标几何实时计算） */
+/** 城际连通（cityLink 表）：连通唯一事实源。距离运行时按坐标几何实时计算，配置不写 dist */
 export interface CityLinkDef {
   tagA: string;
   tagB: string;
-  /** 可选：生成器写入的参考距离（格/几何）；运行时以坐标几何距离为准，此字段仅作校验对照 */
-  dist?: number;
 }
 
 // ────────────────────────────── 向量地图层（V-Point：城市/区域/拐点基于离散坐标，非格子） ──────────────────────────────
@@ -338,7 +326,7 @@ export interface StandingDef {
 }
 
 export interface ConfigValues {
-  speed: number; // 秒/格
+  speed: number; // 秒/距离单位（赶路秒数 = 折线路程 × speed）
   backPackSlotNum: number; // 背包格数
   itemStacking: number; // 单格堆叠上限
   initTaskListSlot: number; // 任务板槽位数
@@ -375,9 +363,6 @@ export interface GameConfig {
   cityByTag: Record<string, CityDef>;
   /** 中文城市名 → CityDef（recipe 的城市列是中文名，需反查） */
   cityByName: Record<string, CityDef>;
-  nodes: MapNodeDef[];
-  nodeByTag: Record<number, MapNodeDef>;
-  roads: MapRoadDef[];
   /** cityLink 表（V3 起）；V1/V2 无此表时为空数组 */
   links: CityLinkDef[];
   /** state 表（V3 起）；旧配置为空数组 */
@@ -387,7 +372,7 @@ export interface GameConfig {
   mapBgImg: string | null;
   /** config.bg1*：bg1 底图变换（偏移 / 缩放 / 浓度）；mapBgImg 为空时不生效 */
   bg1: Bg1Config;
-  // ── 向量地图层（V-Point）：城市/拐点/道路/区域基于离散坐标，非格子；缺省为空 → 走 xlsx 格子路径 ──
+  // ── 向量地图层（V-Point）：城市/拐点/道路/区域基于离散坐标，非格子；xlsx 坐标即唯一真相 ──
   /** 城市离散坐标点（tag 与 cities 对齐） */
   cityPoints: CityPoint[];
   cityPointByTag: Record<string, CityPoint>;
@@ -471,13 +456,14 @@ export type TaskSlot =
 export type Phase =
   | { kind: 'idle' }
   | { kind: 'moving'; taskId: number; path: Cell[]; total: number; remain: number }
-  | { kind: 'working'; taskId: number; total: number; remain: number; label: string }
-  | { kind: 'returning'; path: Cell[]; total: number; remain: number };
+  | { kind: 'working'; taskId: number; total: number; remain: number; label: string };
 
 export interface GameStats {
   tasksDone: number;
-  returnTrips: number;
-  cellsWalked: number;
+  /** 背包满自动入仓次数（2026-10-14 由 returnTrips 改名；回城逻辑已删，旧存档自动迁移） */
+  deposits: number;
+  /** 累计赶路路程（坐标空间欧氏距离单位；2026-10-14 由 cellsWalked 改名，旧存档自动迁移） */
+  distanceWalked: number;
   itemsGained: Record<string, number>;
   startedAt: number;
   /** 评价四档计数 [拙, 平, 佳, 绝]（用于数值校准与自检） */

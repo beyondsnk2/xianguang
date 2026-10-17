@@ -1,7 +1,7 @@
 import type { GameConfig, GameState } from './types';
 import { vdist, type VGraph } from './vgraph';
 import { buildTaskIndex, type TaskIndex } from './taskGen';
-import { bagSlotsUsed, createInitialState } from './state';
+import { createInitialState } from './state';
 import { tick, type TickCtx } from './tick';
 import { eventByTag, resolveEvent } from './event';
 import { randInt } from './rng';
@@ -18,14 +18,16 @@ export interface CheckItem {
  * 坐标模式路网对拍基准（向量图几何距离真值，必须全中）。
  * 按**配置文件名**分组；地图坐标/道路一改，需重跑 `npm run gen:pointmap` 后用
  * `tools/_dist_probe.ts` 重新取真值并刷新此处 expect。
- * 基准由 firstShow_V5.xlsx 实际坐标几何距离测得（四舍五入 2 位）。
+ *
+ * ⚠ 2026-10-13：编辑器导出新版图（全城重排为地理坐标、删除河内）后已重测；
+ *    旧网格坐标下的值（14.05/9.86/34.64/63.86）已失效，勿回改。
  */
 const V5_BENCHMARKS: { from: string; to: string; expect: number; label: string }[] = [
   { from: 'beiping', to: 'beiping', expect: 0, label: '蓟→蓟（同城，距离 0）' },
-  { from: 'beiping', to: 'pingyuan', expect: 14.05, label: '蓟→北平（相邻城）' },
-  { from: 'luoyang', to: 'xiangyang', expect: 9.86, label: '洛阳→襄阳' },
-  { from: 'changan', to: 'jianye', expect: 34.64, label: '长安→建业（东西向）' },
-  { from: 'jiaozhi', to: 'xiangping', expect: 63.86, label: '交趾→襄平（最远）' },
+  { from: 'beiping', to: 'pingyuan', expect: 30.54, label: '蓟→北平（相邻城）' },
+  { from: 'luoyang', to: 'xiangyang', expect: 17.6, label: '洛阳→襄阳' },
+  { from: 'changan', to: 'jianye', expect: 100.17, label: '长安→建业（东西向）' },
+  { from: 'jiaozhi', to: 'xiangping', expect: 219.39, label: '交趾→襄平（最远）' },
 ];
 
 /**
@@ -42,14 +44,11 @@ export interface CheckResult {
   stats: {
     nodeCount: number;
     edgeCount: number;
-    cellCount: number;
     components: number;
     facilityPairs: number;
     avgAll: number;
     avgSameCity: number;
     avgCrossCity: number;
-    avgSameFacility: number;
-    avgCrossFacility: number;
     maxDist: number;
   };
 }
@@ -91,7 +90,7 @@ export function runSelfCheck(cfg: GameConfig, vgraph: VGraph | null): CheckResul
   }
   items.push({ label: '全图连通（单连通分量）', expect: '1', actual: components === 1 ? '1' : `${components}(未全连通)`, ok: components === 1 });
 
-  // 3.5 cityLink 一致性（xlsx 与 pointmap 通用）
+  // 3.5 cityLink 一致性（连通唯一事实源）
   const linkSet = new Set<string>();
   let dupLinks = 0;
   const linkedCities = new Set<string>();
@@ -138,14 +137,11 @@ export function runSelfCheck(cfg: GameConfig, vgraph: VGraph | null): CheckResul
     stats: {
       nodeCount,
       edgeCount,
-      cellCount: 0,
       components,
       facilityPairs: dists.length,
       avgAll: avg(dists.map((x) => x.d)),
       avgSameCity: avg(same),
       avgCrossCity: avg(cross),
-      avgSameFacility: 0,
-      avgCrossFacility: 0,
       maxDist,
     },
   };
@@ -154,11 +150,12 @@ export function runSelfCheck(cfg: GameConfig, vgraph: VGraph | null): CheckResul
 export interface SimResult {
   hours: number;
   tasksDone: number;
-  returnTrips: number;
+  deposits: number;
   avgTaskCycleSec: number;
   tasksPerDay: number;
   avgEmptySlots: number;
-  cellsWalked: number;
+  /** 累计赶路路程（坐标空间欧氏距离单位） */
+  distanceWalked: number;
   storage: Record<string, number>;
   attrs: GameState['attrs'];
   /** 9 技能等级快照 */
@@ -188,8 +185,6 @@ export interface SimResult {
   samples: number;
   /** 空转采样数（应为 0） */
   idleSamples: number;
-  /** 超容却没在回城的采样数（应为 0） */
-  overloadViolations: number;
   /** 已结算的随机事件条数（模拟器代玩家点掉，代表「玩家及时点」的供给上界） */
   eventsSettled: number;
   /** 累计获得的属性经验（四维合计，来自随机事件） */
@@ -224,7 +219,7 @@ export function simulate(
 ): SimResult {
   const autoEvents = opts?.autoEvents ?? true;
   const taskIndex: TaskIndex = buildTaskIndex(cfg);
-  const ctx: TickCtx = { cfg, graph: undefined, vgraph, taskIndex, online: autoEvents };
+  const ctx: TickCtx = { cfg, vgraph, taskIndex, online: autoEvents };
   const now = Date.now();
   const state = createInitialState(cfg, now, seed);
   tick(state, 1e-9, ctx); // 触发 syncPhase：接取队首
@@ -234,18 +229,13 @@ export function simulate(
   let emptySum = 0;
   let samples = 0;
   let idleSamples = 0;
-  let overloadViolations = 0;
   for (let i = 0; i < steps; i++) {
     tick(state, chunk, ctx);
-    // 采样放在事件结算**之前**：事件会发物品，若先结算再采样，会把「事件塞满背包但还没到下次任务结算」
-    // 记成「超容未回城」，那是采样时序造成的假告警（真实玩家下一次任务完成时同样会自动回城）。
+    // 采样放在事件结算**之前**：事件会发物品，若先结算再采样，会把「事件塞满背包」误算进稳态
     const empty = state.slots.filter((s) => s.kind === 'empty').length;
     emptySum += empty;
     samples++;
     if (state.phase.kind === 'idle') idleSamples++;
-    if (bagSlotsUsed(state, cfg) > cfg.values.backPackSlotNum && state.phase.kind !== 'returning') {
-      overloadViolations++;
-    }
     if (autoEvents) autoResolveEvents(state, cfg);
   }
   const totalSec = hours * 3600;
@@ -254,11 +244,11 @@ export function simulate(
   return {
     hours,
     tasksDone: state.stats.tasksDone,
-    returnTrips: state.stats.returnTrips,
+    deposits: state.stats.deposits,
     avgTaskCycleSec: state.stats.tasksDone ? totalSec / state.stats.tasksDone : 0,
     tasksPerDay: (state.stats.tasksDone / hours) * 24,
     avgEmptySlots: samples ? emptySum / samples : 0,
-    cellsWalked: state.stats.cellsWalked,
+    distanceWalked: state.stats.distanceWalked,
     storage: { ...state.storage },
     attrs: { ...state.attrs },
     skills,
@@ -276,7 +266,6 @@ export function simulate(
     storageCount: Object.values(state.storage).reduce((a, b) => a + b, 0),
     samples,
     idleSamples,
-    overloadViolations,
     eventsSettled: state.stats.eventsSettled ?? 0,
     attrXpTotal: state.stats.attrXpTotal ?? 0,
     money: state.money ?? 0,
@@ -308,13 +297,13 @@ export interface OfflineResult {
   awayHours: number;
   settledHours: number;
   tasksDone: number;
-  returnTrips: number;
+  deposits: number;
   costMs: number;
 }
 
 /** 离线结算验证：时间回拨丢弃 + 上限 8 小时 + 离散事件推进（开发文档 §4.6 / §7.3） */
 export function offlineSettle(cfg: GameConfig, vgraph: VGraph | null, awayHours: number, seed = 7): OfflineResult {
-  const ctx: TickCtx = { cfg, graph: undefined, vgraph, taskIndex: buildTaskIndex(cfg) };
+  const ctx: TickCtx = { cfg, vgraph, taskIndex: buildTaskIndex(cfg) };
   const state = createInitialState(cfg, Date.now(), seed);
   tick(state, 1e-9, ctx);
 
@@ -333,7 +322,7 @@ export function offlineSettle(cfg: GameConfig, vgraph: VGraph | null, awayHours:
     awayHours,
     settledHours: capped / 3600,
     tasksDone: state.stats.tasksDone,
-    returnTrips: state.stats.returnTrips,
+    deposits: state.stats.deposits,
     costMs,
   };
 }

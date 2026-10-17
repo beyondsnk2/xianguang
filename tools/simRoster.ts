@@ -39,7 +39,7 @@ const taskIndex = buildTaskIndex(config as GameConfig);
 interface Snap {
   hours: number;
   tasksDone: number;
-  returnTrips: number;
+  deposits: number;
   clsA: number;
   clsB: number;
   clsC: number;
@@ -79,7 +79,7 @@ function snapshot(state: GameState, hours: number): Snap {
   return {
     hours,
     tasksDone: state.stats.tasksDone,
-    returnTrips: state.stats.returnTrips,
+    deposits: state.stats.deposits,
     clsA: state.stats.clsTally.A ?? 0,
     clsB: state.stats.clsTally.B ?? 0,
     clsC: state.stats.clsTally.C ?? 0,
@@ -108,7 +108,7 @@ function snapshot(state: GameState, hours: number): Snap {
 function runCharacter(id: number, checkpoints: number[]): Snap[] {
   const cfg = config as GameConfig;
   const seed = 1000003 + id * 7919; // 每角色不同种子 → 独立随机轨迹
-  const ctx: TickCtx = { cfg, graph: undefined, vgraph, taskIndex, online: true };
+  const ctx: TickCtx = { cfg, vgraph, taskIndex, online: true };
   const state = createInitialState(cfg, Date.now(), seed);
   tick(state, 1e-9, ctx); // 触发 syncPhase：接取队首
 
@@ -205,7 +205,7 @@ for (let ci = 0; ci < CHECKPOINTS.length; ci++) {
     '政治',
     '属性经验',
     '完成任务',
-    '回城',
+    '入仓',
     'A完成',
     'B完成',
     'C完成',
@@ -237,7 +237,7 @@ for (let ci = 0; ci < CHECKPOINTS.length; ci++) {
       s.politics,
       s.attrXp,
       s.tasksDone,
-      s.returnTrips,
+      s.deposits,
       s.clsA,
       s.clsB,
       s.clsC,

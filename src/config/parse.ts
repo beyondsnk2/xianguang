@@ -10,8 +10,6 @@ import {
   type ConfigMeta,
   type GameConfig,
   type ItemDef,
-  type MapNodeDef,
-  type MapRoadDef,
   type CityPoint,
   type Waypoint,
   type RoadLine,
@@ -232,10 +230,6 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   };
   // 区域矩形：州仅为标签、不派生几何（去州化）。向量模式不再渲染州分区色块 → regions 始终为空。
   const regions: RegionDef[] = [];
-
-  // 兼容性占位：格子 nodes/roads 不再由 xlsx 提供（配置已改为坐标真相）；保留字段以满足类型。
-  const nodes: MapNodeDef[] = [];
-  const roads: MapRoadDef[] = [];
 
   // attrLv
   const attrLv: AttrLvRow[] = (tables['attrLv'] ?? [])
@@ -564,8 +558,6 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
   for (const t of tasks) taskByTag[t.tag] = t;
   const cityByTag: Record<string, CityDef> = {};
   for (const c of cities) cityByTag[c.tag] = c;
-  const nodeByTag: Record<number, MapNodeDef> = {};
-  for (const n of nodes) nodeByTag[n.tag] = n;
 
   const config: GameConfig = {
     meta: { ...meta, sheets: names },
@@ -574,15 +566,12 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
     cities,
     cityByTag,
     cityByName,
-    nodes,
-    nodeByTag,
-    roads,
     links,
     states,
     stateByTag,
     mapBgImg: asStr(rawCfg['mapBgImg']) || null,
     bg1,
-    // 向量地图层（坐标真相）：直接由 xlsx 城市坐标 / 连线派生，不再依赖格子栅格化或 ?pointmap 叠加。
+    // 向量地图层（坐标真相）：直接由 xlsx 城市坐标 / 连线派生，无格子栅格化。
     cityPoints,
     cityPointByTag,
     waypoints,
@@ -618,7 +607,7 @@ export function parseWorkbook(sheets: SheetLike[], meta: Omit<ConfigMeta, 'sheet
 
   // ── 校验 ──
   if (!tasks.length) warnings.push('task 表为空');
-  if (!cities.length) warnings.push('city 表为空');
+  if (!cities.length) warnings.push('城市表（mapPoint，type=city）为空');
   // 坐标模式：城市必须带坐标（无坐标则无法在地图上定位，也不参与寻路）
   for (const c of cities) {
     if (!Number.isFinite(c.x) || !Number.isFinite(c.y)) {

@@ -38,3 +38,6 @@ esbuild*.txt
 tools/_bundle_run.cjs
 tools/_dist_probe.ts
 tools/_fixup.py
+
+# Office 临时锁文件
+~$*.xlsx

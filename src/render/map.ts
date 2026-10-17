@@ -1,13 +1,10 @@
-import { MAP_H, MAP_W } from '../game/constants';
-import type { Cell, GameConfig, GameState, MapNodeDef } from '../game/types';
+import type { Cell, GameConfig, GameState } from '../game/types';
 import { currentCell, pointOnPath } from '../game/tick';
 import {
   BG,
   DYN,
-  FAC_FALLBACK,
   NODE,
   ROAD,
-  SMOOTH,
 } from './mapStyle';
 import { bgImageRect } from '../shared/bgGeom';
 
@@ -19,7 +16,7 @@ interface Pt {
   y: number;
 }
 
-/** 平滑后的曲线：格坐标折线 + 每点的「累计格数」标签（用于 §三 按格进度取点） */
+/** 平滑后的曲线：坐标空间折线 + 每点的点序号标签（用于按路径进度取点） */
 interface SmoothCurve {
   pts: Pt[];
   labels: number[];
@@ -27,23 +24,19 @@ interface SmoothCurve {
 
 export class MapRenderer {
   private ctx: CanvasRenderingContext2D;
-  /** 每格屏幕像素 */
+  /** 每坐标单位的屏幕像素 */
   private s = 30;
   private ox = 0;
   private oy = 0;
   private w = 0;
   private h = 0;
-  /** 地图逻辑尺寸，由配置推导（setMapSize 覆盖常量默认值） */
-  private mapW = MAP_W;
-  private mapH = MAP_H;
+  /** 地图逻辑尺寸（坐标空间），由配置 mapBounds 推导（setMapSize 覆盖初始占位） */
+  private mapW = 1;
+  private mapH = 1;
 
-  // ── 烘焙缓存（L0–L3） ──
+  // ── 烘焙缓存（L0–L2） ──
   private cfgKey = '';
-  /** 文明区距离场（格）：-1 = 区外 */
-  private gf: Int16Array | null = null;
-  /** L1 城块色斑离屏层（低分辨率，缩放时平滑放大） */
-  private blockCanvas: HTMLCanvasElement | null = null;
-  /** L2 城际曲线（格坐标平滑折线，每帧按当前缩放描边） */
+  /** L2 城际曲线（坐标空间折线，每帧按当前缩放描边） */
   private roadCurves: SmoothCurve[] = [];
 
   /** L0 程序化占位离屏层（按画布尺寸烘焙；bg1 图可用时不走此路） */
@@ -55,14 +48,6 @@ export class MapRenderer {
 
   /** L4 动态路径平滑缓存（按 phase.path 引用缓存，避免逐帧重算） */
   private pathCache = new Map<Cell[], SmoothCurve>();
-  /** 当前是否直线模式（直线模式下角色轨迹不做平滑，直接贴道路格，与 L2 连线一致） */
-  private straightMode = false;
-  /** 当前是否向量模式（城市/拐点/道路/区域基于离散坐标，非格子） */
-  private vectorMode = false;
-  /** 节点格中心缓存（格坐标，与缩放无关；按节点引用缓存，避免逐帧重算） */
-  private nodeCenters: Map<MapNodeDef, Pt> | null = null;
-  /** 设施中文名缓存（按 cfg.tasks 烘焙一次，避免逐帧线性扫描） */
-  private facLabels: Map<string, string> | null = null;
 
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -71,16 +56,12 @@ export class MapRenderer {
     this.resize();
   }
 
-  /** 按配置实际占地设置地图尺寸（V2 起不再是固定 36×30） */
+  /** 按配置实际占地设置地图尺寸（坐标空间，由 mapBounds 给出） */
   setMapSize(w: number, h: number): void {
     this.mapW = Math.max(1, w);
     this.mapH = Math.max(1, h);
-    // 地图尺寸变化 → 距离场 / 城块 / 曲线全部失效（去州化：无州分区色块/州名）
-    this.gf = null;
-    this.blockCanvas = null;
+    // 地图尺寸变化 → 曲线缓存失效（去州化：无州分区色块/州名）
     this.roadCurves = [];
-    this.nodeCenters = null;
-    this.facLabels = null;
     this.cfgKey = '';
   }
 
@@ -114,6 +95,33 @@ export class MapRenderer {
     this.oy += dy;
   }
 
+  /** 悬停命中半径（像素）：城郭 glyph 固定 13px，取略大值容错 */
+  private static readonly CITY_HIT_R = 14;
+
+  /**
+   * 屏幕坐标 → 城市 tag；无命中返回 null。
+   * 按 glyph 中心距离就近命中（坐标模式唯一口径）。
+   */
+  hitCity(sx: number, sy: number, cfg: GameConfig): string | null {
+    const r = MapRenderer.CITY_HIT_R;
+    let best: string | null = null;
+    let bestD = r;
+    for (const cp of cfg.cityPoints) {
+      const d = Math.hypot(this.px(cp.x) - sx, this.py(cp.y) - sy);
+      if (d < bestD) {
+        bestD = d;
+        best = cp.tag;
+      }
+    }
+    return best;
+  }
+
+  /** 城市 tag → 屏幕坐标（popover 锚点用）；找不到返回 null */
+  cityScreenPos(cfg: GameConfig, tag: string): Pt | null {
+    const cp = cfg.cityPointByTag[tag];
+    return cp ? { x: this.px(cp.x), y: this.py(cp.y) } : null;
+  }
+
   private px(gx: number): number {
     return this.ox + gx * this.s;
   }
@@ -124,22 +132,13 @@ export class MapRenderer {
   // ───────────────────────── 烘焙（L0–L3） ─────────────────────────
 
   /** 惰性烘焙：配置指纹变化时才重算（R3：setMapSize 后惰性触发）。
-   *  坐标模式：城市/拐点/道路/区域基于离散坐标，无格子烘焙（格子分支已退休）。 */
+   *  坐标模式：城市/拐点/道路/区域基于离散坐标，无格子烘焙。 */
   private ensureBaked(cfg: GameConfig): void {
-    const vector = (cfg.cityPoints?.length ?? 0) > 0 && (cfg.roadLines?.length ?? 0) > 0;
-    this.vectorMode = vector;
-    const key = `${this.mapW}x${this.mapH}|${cfg.meta.setName}@${cfg.meta.version}|${cfg.links.length}|${cfg.mapBgImg ?? ''}|${vector ? 'V' : 'G'}|${cfg.roadLines?.length ?? 0}`;
-    if (key === this.cfgKey && (this.gf || vector)) return;
+    const key = `${this.mapW}x${this.mapH}|${cfg.meta.setName}@${cfg.meta.version}|${cfg.links.length}|${cfg.mapBgImg ?? ''}|${cfg.roadLines?.length ?? 0}`;
+    if (key === this.cfgKey) return;
     this.cfgKey = key;
-    this.nodeCenters = new Map();
-    this.facLabels = new Map();
-    for (const t of cfg.tasks ?? []) this.facLabels.set(t.nodeType, t.nodeName);
-
-    // 坐标模式：城市/拐点/道路/区域基于离散坐标，无格子烘焙（退休格子分支）
     this.mapW = Math.max(1, cfg.mapBounds?.w ?? 1);
     this.mapH = Math.max(1, cfg.mapBounds?.h ?? 1);
-    this.gf = null;
-    this.blockCanvas = null;
     this.roadCurves = this.buildRoadsVector(cfg);
     this.loadBg(cfg);
   }
@@ -273,7 +272,6 @@ export class MapRenderer {
 
   draw(cfg: GameConfig, state: GameState, nowMs: number): void {
     const ctx = this.ctx;
-    const s = this.s;
     this.ensureBaked(cfg);
 
     ctx.save();
@@ -287,24 +285,16 @@ export class MapRenderer {
       if (this.bgCanvas) ctx.drawImage(this.bgCanvas, 0, 0, this.w, this.h);
     }
 
-    // L1 城块色斑（缩放平滑放大 → 有机边界）
-    if (this.blockCanvas) {
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(this.blockCanvas, this.px(0), this.py(0), this.mapW * s, this.mapH * s);
-      ctx.imageSmoothingQuality = 'low';
-    }
-
     // L2 道路（双层描边，合并 Path2D → 2 次 stroke）
     this.drawRoads();
 
-    // L3 节点
+    // L3 节点（拐点 + 城市）
     this.drawNodes(cfg);
 
     // L4 动态（角色 + 路径）
     this.drawDynamic(state, nowMs);
 
-    // R7 调试网格（校验曲线与格子路径贴合度）
+    // 调试网格（校验坐标空间点位与道路贴合度）
     if (DEBUG_GRID) this.drawDebugGrid(cfg);
 
     ctx.restore();
@@ -312,10 +302,9 @@ export class MapRenderer {
 
   private drawRoads(): void {
     const ctx = this.ctx;
-    const s = this.s;
     if (!this.roadCurves.length) return;
-    // 向量模式坐标空间大、s 很小，道路用固定像素宽（含 halo），避免被缩成发丝
-    const roadW = this.vectorMode ? 4 : Math.max(ROAD.widthMin, s * ROAD.widthK);
+    // 坐标空间大、s 极小，道路用固定像素宽（含 halo），避免被缩成发丝
+    const roadW = 4;
     const halo = new Path2D();
     const bright = new Path2D();
     for (const curve of this.roadCurves) {
@@ -338,50 +327,8 @@ export class MapRenderer {
     ctx.stroke(bright);
   }
 
+  /** 节点绘制：拐点 + 城市（离散坐标；城市/拐点用固定像素尺寸，不随 s 缩放）。去州化：不渲染州分区色块/州名。 */
   private drawNodes(cfg: GameConfig): void {
-    if (this.vectorMode) {
-      this.drawNodesVector(cfg);
-      return;
-    }
-    const ctx = this.ctx;
-    const s = this.s;
-
-    // 设施点（在城下，避免遮挡城名）
-    for (const node of cfg.nodes) {
-      if (node.name === 'city') continue;
-      const c = this.nodeScreenCenter(node);
-      const r = Math.max(NODE.facilityDotMin, s * NODE.facilityDotK);
-      ctx.fillStyle = NODE.facilityDot;
-      ctx.strokeStyle = NODE.facilityDotStroke;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      if (s > NODE.facilityNameMinS) {
-        const label = this.facilityLabel(node.name);
-        ctx.font = `${Math.max(9, Math.min(18, s * 0.55))}px "PingFang SC","Microsoft YaHei",sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.lineWidth = Math.max(2, s * 0.1);
-        ctx.strokeStyle = 'rgba(8,10,14,0.78)';
-        ctx.strokeText(label, c.x, c.y);
-        ctx.fillStyle = '#f7f9fc';
-        ctx.fillText(label, c.x, c.y);
-      }
-    }
-
-    // 城郭图标 + 城名
-    for (const node of cfg.nodes) {
-      if (node.name !== 'city') continue;
-      const c = this.nodeScreenCenter(node);
-      const name = cfg.cityByTag[node.belong ?? '']?.name ?? '州府';
-      this.drawCityGlyph(c.x, c.y, s * NODE.cityGlyphScale, name);
-    }
-  }
-
-  /** 向量模式节点绘制：拐点 + 城市（离散坐标；城市/拐点用固定像素尺寸，不随 s 缩放）。去州化：不渲染州分区色块/州名。 */
-  private drawNodesVector(cfg: GameConfig): void {
     const ctx = this.ctx;
 
     // 拐点（小圆点，无州色）
@@ -444,17 +391,17 @@ export class MapRenderer {
     const s = this.s;
     const phase = state.phase;
 
-    // 角色锚点（格坐标）
+    // 角色锚点（坐标空间）
     let charGrid: Pt;
 
-    if (phase.kind === 'moving' || phase.kind === 'returning') {
+    if (phase.kind === 'moving') {
       const path = phase.path;
       const sc = this.getSmooth(path);
       const L = path.length;
       const progress = phase.total > 0 ? Math.min(1, Math.max(0, 1 - phase.remain / phase.total)) : 1;
       const g = progress * (L - 1);
-      const bright = phase.kind === 'returning' ? DYN.returningBright : DYN.movingBright;
-      const base = phase.kind === 'returning' ? DYN.returningBase : DYN.movingBase;
+      const bright = DYN.movingBright;
+      const base = DYN.movingBase;
       this.drawPhasePath(sc, g, bright, base);
 
       // 目的地靶标（path 末端，与角色标记造型区分开）
@@ -463,9 +410,9 @@ export class MapRenderer {
 
       charGrid = charOnCurve(sc, g);
     } else {
+      // 坐标空间即是真实坐标，直接落点
       const c = currentCell(state);
-      // 向量模式：坐标空间已是真实坐标，不再偏移 0.5（0.5 是格子模型里「格→格心」的修正）
-      charGrid = this.vectorMode ? { x: c.x, y: c.y } : { x: c.x + 0.5, y: c.y + 0.5 };
+      charGrid = { x: c.x, y: c.y };
     }
 
     const cx = this.px(charGrid.x);
@@ -560,7 +507,7 @@ export class MapRenderer {
     ctx.stroke();
   }
 
-  /** 当前路径：已走段暗色铺底，剩余段亮色（按 §三 格进度切分） */
+  /** 当前路径：已走段暗色铺底，剩余段亮色（按路径进度切分） */
   private drawPhasePath(sc: SmoothCurve, g: number, bright: string, base: string): void {
     const ctx = this.ctx;
     const s = this.s;
@@ -593,37 +540,8 @@ export class MapRenderer {
     ctx.restore();
   }
 
+  /** 调试网格：坐标空间网格 + 城市/拐点锚点 */
   private drawDebugGrid(cfg: GameConfig): void {
-    const ctx = this.ctx;
-    if (this.vectorMode) {
-      this.drawDebugGridVector(cfg);
-      return;
-    }
-    ctx.strokeStyle = 'rgba(255,80,80,0.22)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = 0; x <= this.mapW; x++) {
-      ctx.moveTo(Math.round(this.px(x)) + 0.5, this.py(0));
-      ctx.lineTo(Math.round(this.px(x)) + 0.5, this.py(this.mapH));
-    }
-    for (let y = 0; y <= this.mapH; y++) {
-      ctx.moveTo(this.px(0), Math.round(this.py(y)) + 0.5);
-      ctx.lineTo(this.px(this.mapW), Math.round(this.py(y)) + 0.5);
-    }
-    ctx.stroke();
-    // 格心点（节点格 / 道路格）
-    ctx.fillStyle = 'rgba(255,80,80,0.5)';
-    const dot = (x: number, y: number) => {
-      ctx.beginPath();
-      ctx.arc(this.px(x + 0.5), this.py(y + 0.5), 1.2, 0, Math.PI * 2);
-      ctx.fill();
-    };
-    for (const n of cfg.nodes) for (const c of n.cells) dot(c.x, c.y);
-    for (const r of cfg.roads) dot(r.cell.x, r.cell.y);
-  }
-
-  /** 向量模式调试网格：坐标空间网格 + 城市/拐点锚点 */
-  private drawDebugGridVector(cfg: GameConfig): void {
     const ctx = this.ctx;
     const step = 50;
     ctx.strokeStyle = 'rgba(255,80,80,0.18)';
@@ -650,39 +568,11 @@ export class MapRenderer {
 
   // ───────────────────────── 工具 ─────────────────────────
 
-  private nodeCenter(node: MapNodeDef): Pt {
-    let m = this.nodeCenters;
-    if (!m) { m = new Map(); this.nodeCenters = m; }
-    let c = m.get(node);
-    if (!c) { c = nodeGridCenter(node); m.set(node, c); }
-    return c;
-  }
-
-  private nodeScreenCenter(node: MapNodeDef): Pt {
-    const c = this.nodeCenter(node);
-    return { x: this.px(c.x), y: this.py(c.y) };
-  }
-
-  /** 设施中文名（优先配置 tasks 表 nodeName，兜底 FAC_FALLBACK；已烘焙进 facLabels） */
-  private facilityLabel(name: string): string {
-    return this.facLabels?.get(name) ?? FAC_FALLBACK[name] ?? name;
-  }
-
-  /** L4 动态路径平滑（按引用缓存） */
+  /** L4 动态路径平滑（按引用缓存）：坐标空间折线直接复用，index 标签供 splitCurve 按进度取点 */
   private getSmooth(path: Cell[]): SmoothCurve {
     let sc = this.pathCache.get(path);
     if (!sc) {
-      // 向量模式：路径已是坐标空间几何折线，直接复用（index 标签供 splitCurve 按进度取点）
-      if (this.vectorMode) {
-        sc = { pts: path.map((c) => ({ x: c.x, y: c.y })), labels: path.map((_, i) => i) };
-      } else if (this.straightMode) {
-        sc = {
-          pts: path.map((c) => ({ x: c.x + 0.5, y: c.y + 0.5 })),
-          labels: path.map((_, i) => i),
-        };
-      } else {
-        sc = smoothPath(path);
-      }
+      sc = { pts: path.map((c) => ({ x: c.x, y: c.y })), labels: path.map((_, i) => i) };
       if (this.pathCache.size > 32) this.pathCache.clear();
       this.pathCache.set(path, sc);
     }
@@ -695,154 +585,16 @@ export class MapRenderer {
   }
 }
 
-// ════════════════════ 模块级纯函数（噪声 / 平滑 / 几何） ════════════════════
+// ════════════════════ 模块级纯函数（几何） ════════════════════
 
-
-/** 节点外接矩形中心（格坐标）：1 格 → 格心；2×2 → 块心 */
-export function nodeGridCenter(node: MapNodeDef): Pt {
-  const xs = node.cells.map((c) => c.x);
-  const ys = node.cells.map((c) => c.y);
-  const x1 = Math.min(...xs);
-  const y1 = Math.min(...ys);
-  return { x: x1 + (Math.max(...xs) - x1 + 1) / 2, y: y1 + (Math.max(...ys) - y1 + 1) / 2 };
-}
-
-function douglasPeucker(pts: Pt[], eps: number): number[] {
-  const n = pts.length;
-  if (n <= 2) return pts.map((_, i) => i);
-  const keep = new Uint8Array(n);
-  keep[0] = 1;
-  keep[n - 1] = 1;
-  const stack: [number, number][] = [[0, n - 1]];
-  while (stack.length) {
-    const [a, b] = stack.pop()!;
-    if (b <= a + 1) continue;
-    const pa = pts[a];
-    const pb = pts[b];
-    const dx = pb.x - pa.x;
-    const dy = pb.y - pa.y;
-    const len = Math.hypot(dx, dy) || 1;
-    let maxD = -1;
-    let idx = -1;
-    for (let i = a + 1; i < b; i++) {
-      const d = Math.abs((pts[i].x - pa.x) * dy - (pts[i].y - pa.y) * dx) / len;
-      if (d > maxD) {
-        maxD = d;
-        idx = i;
-      }
-    }
-    if (maxD > eps && idx > 0) {
-      keep[idx] = 1;
-      stack.push([a, idx]);
-      stack.push([idx, b]);
-    }
-  }
-  const out: number[] = [];
-  for (let i = 0; i < n; i++) if (keep[i]) out.push(i);
-  return out;
-}
-
-function catmull(p0: Pt, p1: Pt, p2: Pt, p3: Pt, u: number): Pt {
-  const u2 = u * u;
-  const u3 = u2 * u;
-  return {
-    x:
-      0.5 *
-      (2 * p1.x +
-        (-p0.x + p2.x) * u +
-        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * u2 +
-        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * u3),
-    y:
-      0.5 *
-      (2 * p1.y +
-        (-p0.y + p2.y) * u +
-        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * u2 +
-        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * u3),
-  };
-}
-
-/**
- * 路径平滑（L2 / L4 共用）：
- * 格序列 → Douglas-Peucker 去共线 → 法向低幅弯曲 → Catmull-Rom 采样。
- * 返回密集折线 + 每点「累计格数」标签（原序列下标），供 §三 按格进度取点。
- */
-export function smoothPath(cells: Cell[]): SmoothCurve {
-  const L = cells.length;
-  if (L === 0) return { pts: [], labels: [] };
-  if (L === 1) return { pts: [{ x: cells[0].x + 0.5, y: cells[0].y + 0.5 }], labels: [0] };
-
-  const P: Pt[] = cells.map((c) => ({ x: c.x + 0.5, y: c.y + 0.5 }));
-  const keep = douglasPeucker(P, SMOOTH.dpTolerance);
-
-  // 合并过近的保留点：控制点间距过短时 Catmull-Rom 会过冲成环
-  const Q: Pt[] = [];
-  const qi: number[] = [];
-  for (const i of keep) {
-    const p = P[i];
-    const last = Q[Q.length - 1];
-    if (last && Math.hypot(p.x - last.x, p.y - last.y) < SMOOTH.minCtrlDist) continue;
-    Q.push(p);
-    qi.push(i);
-  }
-  // 末端必须保留（角色取点依赖终点标签）
-  if (qi[qi.length - 1] !== L - 1) {
-    Q.push(P[L - 1]);
-    qi.push(L - 1);
-  }
-  if (Q.length < 2) return { pts: [P[0], P[L - 1]], labels: [0, L - 1] };
-
-  // 法向弯曲（默认关闭，见 SMOOTH.bendAmp）：仅当开启且相邻段足够长时施加，
-  // 相位取自格位置而非点序，保证共享走廊的曲线获得一致偏移、互不穿插
-  if (SMOOTH.bendAmp > 0) {
-    for (let j = 1; j < Q.length - 1; j++) {
-      const p0 = Q[j - 1];
-      const p1 = Q[j];
-      const p2 = Q[j + 1];
-      const lenPrev = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-      const lenNext = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-      const len = Math.min(lenPrev, lenNext);
-      if (len < 1.2) continue;
-      const amp = Math.min(SMOOTH.bendAmp, len * 0.18);
-      const dx = p2.x - p0.x;
-      const dy = p2.y - p0.y;
-      const dl = Math.hypot(dx, dy) || 1;
-      const ph = Math.sin(p1.x * 1.3 + p1.y * 0.9);
-      Q[j] = { x: p1.x + (-dy / dl) * amp * ph, y: p1.y + (dx / dl) * amp * ph };
-    }
-  }
-
-  const pts: Pt[] = [];
-  const labels: number[] = [];
-  const n = Q.length;
-  const get = (i: number) => Q[Math.max(0, Math.min(n - 1, i))];
-  for (let j = 0; j < n - 1; j++) {
-    const p0 = get(j - 1);
-    const p1 = Q[j];
-    const p2 = Q[j + 1];
-    const p3 = get(j + 2);
-    const a = qi[j];
-    const b = qi[j + 1];
-    if (j === 0) {
-      pts.push(p1);
-      labels.push(a);
-    }
-    for (let t = 1; t <= SMOOTH.catmullSteps; t++) {
-      const u = t / SMOOTH.catmullSteps;
-      pts.push(catmull(p0, p1, p2, p3, u));
-      labels.push(a + (b - a) * u);
-    }
-  }
-  return { pts, labels };
-}
-
-/** §三 取点：按格进度 g 在平滑曲线上插值（非弧长均匀），返回格坐标 */
+/** §三 取点：按路径进度 g 在平滑曲线上插值（非弧长均匀），返回坐标 */
 function charOnCurve(sc: SmoothCurve, g: number): Pt {
   if (sc.pts.length === 1) return sc.pts[0];
   const { bx, by } = splitCurve(sc, g);
   return { x: bx, y: by };
 }
 
-/** 在平滑曲线上按格进度 g 切分，返回分段索引 k 与切点 bx/by（drawPhasePath 与 charOnCurve 共用） */
+/** 在平滑曲线上按路径进度 g 切分，返回分段索引 k 与切点 bx/by（drawPhasePath 与 charOnCurve 共用） */
 function splitCurve(sc: SmoothCurve, g: number): { k: number; bx: number; by: number } {
   const { pts, labels } = sc;
   let k = 0;

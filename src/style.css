@@ -560,3 +560,71 @@ button.active { background: var(--gold); color: #1a1206; border-color: var(--gol
   padding-left: 10px;
   border-left: 3px solid var(--gold);
 }
+
+/* ── 城市悬停 tooltip / 点击弹窗（地图锚定 popover，均挂 #map-pane 内） ── */
+#city-tip, #city-pop {
+  position: absolute;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--text);
+}
+/* #city-pop 自带 display:flex，会压过 UA 的 [hidden]{display:none，需显式覆盖 */
+#city-tip[hidden], #city-pop[hidden] { display: none; }
+
+#city-tip {
+  z-index: 30;
+  pointer-events: none; /* 不挡画布悬停 */
+  padding: 8px 10px;
+  max-width: 220px;
+  line-height: 1.7;
+}
+.ct-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.ct-name { font-size: 14px; font-weight: 500; color: var(--gold); }
+.ct-state { font-size: 11px; color: var(--dim); }
+.ct-row { color: var(--dim); }
+.ct-row b { color: var(--text); font-weight: 500; }
+.ct-vis.on { color: var(--green); }
+.ct-vis.start { color: var(--gold); }
+.ct-vis.off { color: var(--dim); }
+.ct-facs { color: var(--dim); }
+
+#city-pop {
+  z-index: 20;
+  pointer-events: auto;
+  width: 300px;
+  max-height: calc(100% - 16px); /* 超高时 body 内部滚动，绝不溢出地图面板 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cp-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border-bottom: 1px solid var(--line);
+}
+.cp-title { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.cp-name { font-size: 14px; font-weight: 500; color: var(--gold); }
+.cp-state { font-size: 11px; color: var(--dim); }
+.cp-badge { font-size: 11px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); }
+.cp-badge.start { color: var(--gold); border-color: var(--gold); }
+.cp-badge.on { color: var(--green); border-color: var(--green); }
+.cp-badge.off { color: var(--dim); }
+.cp-body { padding: 6px 10px 8px; overflow-y: auto; line-height: 1.7; }
+.cp-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; }
+.cp-row.cp-sec { border-top: 1px solid var(--line); margin-top: 5px; padding-top: 6px; }
+.cp-k { color: var(--dim); flex: 0 0 auto; }
+.cp-v { text-align: right; }
+.cp-bad { color: var(--red); }
+.cp-loc { color: var(--gold); font-size: 11px; }
+.cp-city-btn {
+  background: none; border: none; padding: 0 2px;
+  color: var(--blue); cursor: pointer; font-size: 12px; font-family: inherit;
+}
+.cp-city-btn:hover { color: var(--gold); }
+.cp-sep { color: var(--dim); }
+/* 任务类别角标（与任务板卡片同色板：A绿 / B蓝 / C紫） */
+.cls-a, .cls-b, .cls-c { font-style: normal; font-size: 11px; }
+.cls-a { color: var(--green); }
+.cls-b { color: var(--blue); }
+.cls-c { color: var(--r1); }

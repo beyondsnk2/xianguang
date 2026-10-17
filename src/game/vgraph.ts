@@ -1,8 +1,10 @@
 /**
- * 向量地图图（V-Point）：城市/拐点作为离散坐标节点，道路为几何折线（非格子）。
- * 与格子真相模型（graph.ts / buildGraph / findPath）完全并存——xlsx 配置走格子，
- * ?pointmap 配置走本向量图。Dijkstra 在节点图上跑，返回真实几何折线 + 欧氏距离，
+ * 向量地图图（V-Point，坐标模式唯一路网模型）：城市/拐点作为离散坐标节点，
+ * 道路为几何折线（非格子）。Dijkstra 在节点图上跑，返回真实几何折线 + 欧氏距离，
  * 因此「显示直线 = 角色移动 = 玩法距离」三者天然统一，且无栅格化损耗。
+ *
+ * 历史：V-Point 早期与格子真相模型（graph.ts / buildGraph / findPath）并存，
+ * xlsx 改坐标真相后格子图已删除（2026-10-14），本文件是唯一路网实现。
  */
 
 import type { Cell, GameConfig } from './types';
@@ -33,7 +35,7 @@ export interface VPath {
   cost: number;
 }
 
-/** 由 GameConfig 的向量层构建图；无向量层返回 null（调用方回退格子图） */
+/** 由 GameConfig 的向量层构建图；无向量层返回 null（main.ts 启动时按失败处理） */
 export function buildVGraph(cfg: GameConfig): VGraph | null {
   if (!cfg.cityPoints.length && !cfg.waypoints.length) return null;
   const nodes = new Map<string, VNode>();
@@ -162,20 +164,4 @@ export function vpathFromPoint(g: VGraph, from: Cell, toId: string): VPath | nul
   if (!p) return null;
   const lead = Math.hypot(from.x - p.points[0].x, from.y - p.points[0].y);
   return { points: [{ x: from.x, y: from.y }, ...p.points], cost: p.cost + lead };
-}
-
-/** 到最近城市的路径（用于背包满自动回城） */
-export function vpathToNearestCity(g: VGraph, from: Cell): VPath | null {
-  let target: string | null = null;
-  let bestD = Infinity;
-  for (const n of g.nodes.values()) {
-    if (n.kind !== 'city') continue;
-    const d = Math.hypot(n.x - from.x, n.y - from.y);
-    if (d < bestD) {
-      bestD = d;
-      target = n.id;
-    }
-  }
-  if (!target) return null;
-  return vpathFromPoint(g, from, target);
 }

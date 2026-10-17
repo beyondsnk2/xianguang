@@ -1,4 +1,4 @@
-import type { CityDef, GameConfig, MapNodeDef, Task, TaskDef } from './types';
+import type { CityDef, GameConfig, Task, TaskDef } from './types';
 import { pickOne, randFloat, weightedPick } from './rng';
 import { C_FAVOR_CHANCE, C_MIN_QUALITY, RARE_MIN_QUALITY } from './constants';
 import type { AmbitionKey, GameState, PaceKey } from './types';
@@ -31,8 +31,6 @@ export const PACE_OFFSET: Record<PaceKey, number> = {
 export interface TaskIndex {
   /** nodeType → 拥有该设施的城市 */
   citiesByNodeType: Map<string, CityDef[]>;
-  /** `${cityTag}/${nodeType}` → 节点 */
-  nodeByCityType: Map<string, MapNodeDef>;
   /** V2：技能 tag → 该技能的任务（按品质升序）；V1 配置无 skill 列时为空 */
   tasksBySkill: Map<string, TaskDef[]>;
   /** 有可用设施节点的任务（生成时的候选池） */
@@ -49,11 +47,6 @@ export function buildTaskIndex(cfg: GameConfig): TaskIndex {
       list.push(city);
       citiesByNodeType.set(t, list);
     }
-  }
-  const nodeByCityType = new Map<string, MapNodeDef>();
-  for (const node of cfg.nodes) {
-    if (!node.belong || node.name === 'city') continue;
-    nodeByCityType.set(`${node.belong}/${node.name}`, node);
   }
 
   /** 任务至少能被一座城市承接（坐标模式：城市拥有该设施 taskType 即可，无独立设施节点） */
@@ -75,7 +68,6 @@ export function buildTaskIndex(cfg: GameConfig): TaskIndex {
 
   return {
     citiesByNodeType,
-    nodeByCityType,
     tasksBySkill,
     availableTasks,
     skillTags: [...tasksBySkill.keys()],

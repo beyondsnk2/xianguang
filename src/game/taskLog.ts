@@ -35,7 +35,7 @@ export interface TaskRecordInput {
 export interface TaskRecord extends TaskRecordInput {
   /** 角色序号（第几个模拟角色） */
   charId: number;
-  /** 路上用时（秒）：格数 × speed，等于 moving 阶段的 phase.total */
+  /** 路上用时（秒）：路程（距离单位）× speed，等于 moving 阶段的 phase.total */
   travelSec: number;
   /** 该角色内的完成顺序，从 1 开始 */
   seq: number;

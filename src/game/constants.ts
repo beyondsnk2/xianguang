@@ -38,10 +38,6 @@ export const LOG_LIMIT = 40;
  */
 export const EVENT_LIMIT = 200;
 
-/** 地图逻辑尺寸（配置表里没有，V1 遗留常量；渲染与寻路均已从 config 推导，勿新引用） */
-export const MAP_W = 36;
-export const MAP_H = 30;
-
 // ─────────────────────────── V2 技能 / 品质 / 评价 常量 ───────────────────────────
 
 /** 技能等级上限 100 级 = 10 档 */

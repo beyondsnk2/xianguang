@@ -29,6 +29,7 @@ import type { EventResult } from './game/event';
 import { eventWatermark } from './game/events';
 import { resolveEvent } from './game/event';
 import { fmtDur } from './ui/format';
+import { buildCityInfo, cityPopBodyHtml, cityTipHtml, placePopover, placeTip } from './ui/cityPopover';
 
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -58,7 +59,7 @@ async function boot(): Promise<void> {
     return;
   }
   const taskIndex: TaskIndex = buildTaskIndex(cfg);
-  const ctx: TickCtx = { cfg, graph: undefined, vgraph, taskIndex };
+  const ctx: TickCtx = { cfg, vgraph, taskIndex };
 
   // 存档只要不是当前配置的（含没有 cfgKey 的老存档），直接删除并重开，不做兼容迁移
   const cfgKey = `${cfg.meta.setName}_V${cfg.meta.version}`;
@@ -93,7 +94,6 @@ async function boot(): Promise<void> {
   if (capped > 5) {
     const before = {
       tasks: state.stats.tasksDone,
-      returns: state.stats.returnTrips,
       storage: storageItemCount(state),
     };
     tick(state, capped, ctx);
@@ -101,7 +101,7 @@ async function boot(): Promise<void> {
     pushLog(state, `离线结算 ${fmtDur(capped)}：完成 ${state.stats.tasksDone - before.tasks} 个任务`);
     toast(
       `你离开了 ${fmtDur(elapsed)}${elapsed > capped ? `（离线收益上限 ${OFFLINE_CAP_HOURS} 小时，结算 ${fmtDur(capped)}）` : ''}：` +
-        `完成 ${state.stats.tasksDone - before.tasks} 个任务，回城 ${state.stats.returnTrips - before.returns} 次，入仓 ${gained} 件`,
+        `完成 ${state.stats.tasksDone - before.tasks} 个任务，入仓 ${gained} 件`,
       8000,
     );
   }
@@ -352,7 +352,10 @@ async function boot(): Promise<void> {
     }
   });
   window.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape') closeModal();
+    if (ev.key === 'Escape') {
+      closeModal();
+      closeCityPop();
+    }
   });
 
   function refreshUI(): void {
@@ -363,6 +366,7 @@ async function boot(): Promise<void> {
     renderModal();
     renderFeed(el('feed-body'), state);
     board.update(state, cfg, vgraph);
+    if (popCity) renderCityPop(); // 弹窗内容随 250ms 周期刷新（距离/任务关联等动态值）
     syncEventBadge();
     drainEvents();
   }
@@ -400,7 +404,88 @@ async function boot(): Promise<void> {
   el('btn-zoomin').addEventListener('click', () => renderer.zoom(1.25));
   el('btn-zoomout').addEventListener('click', () => renderer.zoom(0.8));
 
-  // 地图交互：滚轮缩放 / 拖动平移
+  // ── 城市悬停 tooltip + 点击弹窗（地图锚定 popover） ──
+  const mapPane = el('map-pane');
+  const tipEl = el('city-tip');
+  const popEl = el('city-pop');
+  const popNameEl = el('city-pop-name');
+  const popStateEl = el('city-pop-state');
+  const popBadgeEl = el('city-pop-badge');
+  const popBodyEl = el('city-pop-body');
+  let tipCity: string | null = null; // 当前悬停城市（tooltip 内容缓存，同城不重建）
+  let popCity: string | null = null; // 当前弹窗城市；null = 弹窗关闭
+
+  const paneSize = (): { w: number; h: number } => {
+    const r = mapPane.getBoundingClientRect();
+    return { w: r.width, h: r.height };
+  };
+  const localPos = (ev: PointerEvent): { x: number; y: number } => {
+    const r = canvas.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  };
+
+  function showTip(tag: string | null): void {
+    if (tipCity === tag) return;
+    tipCity = tag;
+    if (!tag) {
+      tipEl.hidden = true;
+      tipEl.innerHTML = '';
+      return;
+    }
+    const info = buildCityInfo(cfg, state, vgraph, tag);
+    if (!info) {
+      tipEl.hidden = true;
+      return;
+    }
+    tipEl.innerHTML = cityTipHtml(info);
+    tipEl.hidden = false;
+  }
+  function moveTip(ev: PointerEvent): void {
+    if (tipEl.hidden || !tipCity) return;
+    const pos = placeTip(paneSize(), localPos(ev), { w: tipEl.offsetWidth, h: tipEl.offsetHeight });
+    tipEl.style.left = `${pos.x}px`;
+    tipEl.style.top = `${pos.y}px`;
+  }
+  function closeCityPop(): void {
+    if (!popCity) return;
+    popCity = null;
+    popEl.hidden = true;
+    popBodyEl.innerHTML = '';
+  }
+  function openCityPop(tag: string): void {
+    popCity = tag;
+    popEl.hidden = false;
+    showTip(null); // 弹窗优先，隐藏 tooltip 避免叠噪
+    renderCityPop();
+  }
+  function renderCityPop(): void {
+    if (!popCity) return;
+    const info = buildCityInfo(cfg, state, vgraph, popCity);
+    if (!info) {
+      closeCityPop();
+      return;
+    }
+    popNameEl.textContent = info.name;
+    popStateEl.textContent = info.stateName ?? '';
+    popStateEl.hidden = !info.stateName;
+    popBadgeEl.textContent = info.isStart ? '出生地' : info.visited ? '已造访' : '未造访';
+    popBadgeEl.className = `cp-badge ${info.isStart ? 'start' : info.visited ? 'on' : 'off'}`;
+    popBodyEl.innerHTML = cityPopBodyHtml(info);
+    positionCityPop();
+  }
+  function positionCityPop(): void {
+    if (!popCity) return;
+    const anchor = renderer.cityScreenPos(cfg, popCity);
+    if (!anchor) {
+      closeCityPop();
+      return;
+    }
+    const pos = placePopover(paneSize(), anchor, { w: popEl.offsetWidth, h: popEl.offsetHeight });
+    popEl.style.left = `${pos.x}px`;
+    popEl.style.top = `${pos.y}px`;
+  }
+
+  // 地图交互：滚轮缩放 / 拖动平移 / 城市悬停 tooltip / 城市点击弹窗
   const canvas = el<HTMLCanvasElement>('map');
   canvas.addEventListener('wheel', (ev) => {
     ev.preventDefault();
@@ -411,25 +496,64 @@ async function boot(): Promise<void> {
   let dragging = false;
   let lastX = 0;
   let lastY = 0;
+  let downX = 0;
+  let downY = 0;
   canvas.addEventListener('pointerdown', (ev) => {
+    downX = ev.clientX;
+    downY = ev.clientY;
+    showTip(null);
     dragging = true;
     lastX = ev.clientX;
     lastY = ev.clientY;
     canvas.classList.add('dragging');
+    canvas.style.cursor = ''; // 让位给 .dragging 的 grabbing
     canvas.setPointerCapture(ev.pointerId);
   });
   canvas.addEventListener('pointermove', (ev) => {
-    if (!dragging) return;
-    renderer.pan(ev.clientX - lastX, ev.clientY - lastY);
-    lastX = ev.clientX;
-    lastY = ev.clientY;
+    if (dragging) {
+      renderer.pan(ev.clientX - lastX, ev.clientY - lastY);
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+      return;
+    }
+    if (popCity || ev.buttons !== 0) return; // 弹窗打开时不刷 tooltip；仅响应无按键悬停
+    const p = localPos(ev);
+    const tag = renderer.hitCity(p.x, p.y, cfg);
+    showTip(tag);
+    canvas.style.cursor = tag ? 'pointer' : '';
+    moveTip(ev);
   });
   const endDrag = () => {
     dragging = false;
     canvas.classList.remove('dragging');
   };
-  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointerup', (ev) => {
+    endDrag();
+    // 位移 >5px 视为拖动平移，不触发点击（阈值区分点击与拖图）
+    if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 5) return;
+    const p = localPos(ev);
+    const tag = renderer.hitCity(p.x, p.y, cfg);
+    if (tag) {
+      if (popCity === tag) closeCityPop(); // 再点同一城 = 关闭
+      else openCityPop(tag);
+    } else {
+      closeCityPop(); // 点地图空白处 = 关闭
+    }
+  });
   canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('pointerleave', () => showTip(null));
+
+  // 点弹窗外关闭：地图面板内、画布以外的区域（浮层工具条/边角）
+  mapPane.addEventListener('pointerdown', (ev) => {
+    if (ev.target === canvas) return; // 画布点击由上面 pointerup 的阈值逻辑统一处理
+    if (!(ev.target as HTMLElement).closest('#city-pop')) closeCityPop();
+  });
+  // 弹窗内：✕ 关闭；邻城按钮下钻切换（委托挂持久外壳，body 每 250ms 重渲染不丢点击）
+  el('city-pop-close').addEventListener('click', closeCityPop);
+  popEl.addEventListener('click', (ev) => {
+    const btn = (ev.target as HTMLElement).closest('[data-city]') as HTMLElement | null;
+    if (btn?.dataset.city) openCityPop(btn.dataset.city);
+  });
 
   const ro = new ResizeObserver(() => renderer.resize());
   ro.observe(canvas.parentElement as HTMLElement);
@@ -443,6 +567,7 @@ async function boot(): Promise<void> {
     dt = Math.min(dt, OFFLINE_CAP_HOURS * 3600);
     if (leader.active && dt > 0) tick(state, dt * speed, ctx);
     renderer.draw(cfg, state, t);
+    if (popCity) positionCityPop(); // 平移/缩放时弹窗跟随锚点城市，保持不脱锚
     requestAnimationFrame(frame);
   }
 

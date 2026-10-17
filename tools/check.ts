@@ -39,15 +39,14 @@ function main(): void {
 
   console.log(`生效表：${config.meta.sheets.join(', ')}`);
   console.log(
-    `字段数：task=${config.tasks.length} city=${config.cities.length} mapNode=${config.nodes.length} ` +
-      `mapRoad=${config.roads.length} attrLv=${config.attrLv.length} config=${Object.keys(config.values).length}`,
+    `字段数：task=${config.tasks.length} city=${config.cities.length} attrLv=${config.attrLv.length} config=${Object.keys(config.values).length}`,
   );
   console.log(
     `V2 表：skill=${config.skillDefs.length} item=${config.items.length} recipe=${config.recipes.length} ` +
       `blueprint=${config.blueprints.length}`,
   );
   console.log(
-    `数值：speed=${config.values.speed}s/格 背包=${config.values.backPackSlotNum}格×${config.values.itemStacking} ` +
+    `数值：speed=${config.values.speed}s/单位 背包=${config.values.backPackSlotNum}格×${config.values.itemStacking} ` +
       `任务槽=${config.values.initTaskListSlot} 出生候选=${config.values.startCityRand.join('/')}` +
       ` 初始金钱=${config.values.initMoney}文`,
   );
@@ -103,17 +102,13 @@ function main(): void {
         if (d === null) {
           console.log(`❌ ${l.tagA}-${l.tagB}：路网不可达（配置声称连通）`);
           linkBad++;
-        } else if (typeof l.dist === 'number' && Number.isFinite(l.dist) && Math.abs(d - l.dist) > 0.5) {
-          // dist 已非配置必填（坐标模式下按几何实时计算）；只有表里还留着旧值时才对拍
-          console.log(`❌ ${l.tagA}-${l.tagB}：dist 漂移，配置 ${l.dist} / 实测 ${d.toFixed(2)}`);
-          linkBad++;
         }
       }
       if (linkBad) {
         console.log(`❌ cityLink 有 ${linkBad} 条与路网不一致（改坐标后在编辑器同步连线，或重跑 npm run gen:pointmap）`);
         process.exitCode = 1;
       } else {
-        console.log('✅ 全部 link 端点有效、可达，dist 与路网实测一致');
+        console.log('✅ 全部 link 端点有效、可达');
       }
     }
   }
@@ -126,18 +121,17 @@ function main(): void {
   const doc = DOC_STATS[docKey(latest.setName, latest.version)] ?? DOC_STATS[latest.setName];
   const tag = (v: number | undefined) => (doc ? `（文档 ${v}）` : '');
   console.log(
-    `全部节点对 ${s.facilityPairs} 对：平均 ${s.avgAll.toFixed(2)} 格${tag(doc?.all)}，最大 ${s.maxDist}${tag(doc?.max)}\n` +
-      `　同城 ${s.avgSameCity.toFixed(2)}${tag(doc?.same)}｜跨城 ${s.avgCrossCity.toFixed(2)}${tag(doc?.cross)}\n` +
-      `　仅设施：同城 ${s.avgSameFacility.toFixed(2)}｜跨城 ${s.avgCrossFacility.toFixed(2)}`,
+    `全部节点对 ${s.facilityPairs} 对：平均 ${s.avgAll.toFixed(2)} 单位${tag(doc?.all)}，最大 ${s.maxDist}${tag(doc?.max)}\n` +
+      `　同城 ${s.avgSameCity.toFixed(2)}${tag(doc?.same)}｜跨城 ${s.avgCrossCity.toFixed(2)}${tag(doc?.cross)}`,
   );
 
   console.log('\n── 24 小时节奏模拟 ──');
   const sim = simulate(config, vgraph, 24);
   console.log(`完成任务：${sim.tasksDone} 个（约 ${sim.tasksPerDay.toFixed(1)} 个/天）`);
   console.log(`单任务周期：${(sim.avgTaskCycleSec / 60).toFixed(1)} 分钟（${sim.avgTaskCycleSec.toFixed(0)} 秒）`);
-  console.log(`回城次数：${sim.returnTrips} 次/天`);
+  console.log(`入仓次数：${sim.deposits} 次/天`);
   console.log(`稳态空槽：${sim.avgEmptySlots.toFixed(2)} 个`);
-  console.log(`累计走格：${sim.cellsWalked}`);
+  console.log(`累计行程：${sim.distanceWalked}`);
   console.log(`仓库：${sim.storageCount} 件 ${JSON.stringify(sim.storage)}`);
   console.log(`四维属性：${JSON.stringify(sim.attrs)}`);
   console.log(
@@ -159,7 +153,7 @@ function main(): void {
   console.log(
     `金钱：${sim.money} 文（初始 ${config.values.initMoney}）｜累计收入 +${sim.moneyEarned}（工钱 ${sim.moneyEarnedWage} / 赏金 ${sim.moneyEarnedBounty}）／ 支出 -${sim.moneySpent} ｜ 自动补货 ${sim.restockCount} 次`,
   );
-  console.log(`空转采样：${sim.idleSamples} / ${sim.samples}（应 0）｜超容未回城：${sim.overloadViolations}（应 0）`);
+  console.log(`空转采样：${sim.idleSamples} / ${sim.samples}（应 0）`);
 
   // V4 价格体系（无 price 表时整体禁用，这里是唯一的观测口）
   if (config.priceRows.length) {
@@ -200,7 +194,7 @@ function main(): void {
     const r = offlineSettle(config, vgraph, h);
     console.log(
       `离开 ${h} 小时 → 结算 ${r.settledHours.toFixed(1)} 小时，完成 ${r.tasksDone} 个任务，` +
-        `回城 ${r.returnTrips} 次，耗时 ${r.costMs} ms`,
+        `入仓 ${r.deposits} 次，耗时 ${r.costMs} ms`,
     );
   }
 

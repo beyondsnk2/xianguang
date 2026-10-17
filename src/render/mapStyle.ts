@@ -1,9 +1,15 @@
 /**
  * mapStyle.ts —— 地图渲染视觉常量集中地（V3 写实化渲染）。
- * 文档《V3地图渲染开发_v1.md》要求：所有配色 / 线宽系数 / warp 幅度 / 烘焙分辨率 /
- * 文明区半径等魔法数集中到此文件，render/map.ts 不得散落魔法数。
+ * 文档《V3地图渲染开发_v1.md》要求：所有配色 / 线宽系数等魔法数集中到此文件，
+ * render/map.ts 不得散落魔法数。
  *
  * 仅存放「只读常量 + 与配置无关的兜底表」，不引入运行期状态。
+ *
+ * 2026-10-14 清理：格子时代遗留常量已整对象删除——
+ *   - BLOCK（城块烘焙/文明区距离场）：坐标模式无格子烘焙，无消费者
+ *   - SMOOTH（格子路径平滑）：路径即坐标折线，无需 DP/Catmull-Rom 重采样
+ *   - NODE 设施点/州名字段：坐标模式只画拐点 + 城郭，设施信息走城市弹窗
+ *   - ROAD.widthMin / NEUTRAL_BLOCK：仅格子分支使用，随分支删除
  */
 
 /** L0 背景层 */
@@ -22,52 +28,14 @@ export const BG = {
   vignette: 'rgba(8,10,6,0.5)',
 } as const;
 
-/** L1 城块层 */
-export const BLOCK = {
-  /** 烘焙分辨率（取目标画布 CSS 尺寸的 1/3 左右；60×45 地图 → 480×360） */
-  bakeW: 480,
-  bakeH: 360,
-  /** 文明区半径 R（格）：距离场 ≤ R 即「城市 + 周边空地」 */
-  civilizedRadius: 4,
-  /** domain warp 幅度（格）：低频噪声位移；实测 3.4 稳定，4.5 会把贴边城块扭碎 */
-  warpAmp: 3.4,
-  /** domain warp 空间频率（/格） */
-  warpFreq: 0.09,
-  /** 城心 alpha（最高） */
-  alphaCore: 0.66,
-  /** 文明区边缘 alpha（最低） */
-  alphaEdge: 0.3,
-  /** 笔触细噪声幅度（±） */
-  noiseAmp: 7,
-} as const;
-
 /** L2 道路层（双层描边） */
 export const ROAD = {
   /** 底层（暗色描边） */
   halo: 'rgba(92,68,38,0.34)',
   /** 上层（米白主色） */
   bright: 'rgba(234,220,180,0.95)',
-  /** 线宽下限（像素） */
-  widthMin: 1.6,
-  /** 线宽系数（× 每格像素 s） */
+  /** 线宽系数（× 每坐标单位像素 s；坐标空间下 s 极小，道路主干用固定像素宽，见 drawRoads） */
   widthK: 0.16,
-} as const;
-
-/** 路径平滑（L2 / L4 共用算法） */
-export const SMOOTH = {
-  /** Douglas-Peucker 容差（格） */
-  dpTolerance: 0.28,
-  /**
-   * 法向弯曲幅度（格）。**默认 0 = 关闭**：
-   * 共享走廊的多条曲线若各自加随机弯会互相穿插（无意义交叉），
-   * 且幅度与短段长度同量级时 Catmull-Rom 会过冲成环（无意义小圈）。
-   * 曲线的有机感由「路网本身走向 + Catmull-Rom 圆角」提供，足够且保真。
-   */
-  bendAmp: 0,
-  /** Catmull-Rom 每段采样步数 */
-  catmullSteps: 8,
-  /** 相邻控制点最小间距（格）：更近则合并，防 Catmull-Rom 短段过冲成环 */
-  minCtrlDist: 0.75,
 } as const;
 
 /** L3 节点层 */
@@ -80,18 +48,6 @@ export const NODE = {
   cityGlyphScale: 0.9,
   /** 城名显示的最小 s（s>此值才画城名） */
   cityNameMinS: 7,
-  /** 设施点半径下限（像素） */
-  facilityDotMin: 1.6,
-  /** 设施点半径系数（× s） */
-  facilityDotK: 0.14,
-  /** 设施名首字显示的最小 s */
-  facilityNameMinS: 16,
-  /** 州名显示的最大 s（s<此值才画州名，放大后由城名接管） */
-  stateNameMaxS: 14,
-  /** 设施点颜色 */
-  facilityDot: 'rgba(245,240,225,0.85)',
-  /** 设施点描边 */
-  facilityDotStroke: 'rgba(30,25,16,0.55)',
   /** 城郭填充 */
   cityFill: '#F2EDDC',
   /** 城郭描边 */
@@ -128,16 +84,9 @@ export const DYN = {
   charAnchorK: 1.8,
   /** 移动亮色（品红，与暖米色道路强反差） */
   movingBright: '#ff4fa3',
-  /** 回城亮色（青绿，与暖米色道路强反差） */
-  returningBright: '#2fe39a',
   /** 移动已走底色（深品红） */
   movingBase: 'rgba(200,40,120,0.4)',
-  /** 回城已走底色（深青绿） */
-  returningBase: 'rgba(40,170,120,0.4)',
 } as const;
-
-/** 旧配置（无 state 表）降级：城块用单色中性色 */
-export const NEUTRAL_BLOCK = '#6E7459';
 
 /** 设施类型 → 兜底中文名（配置 tasks 表缺 nodeName 时用） */
 export const FAC_FALLBACK: Record<string, string> = {
@@ -158,5 +107,3 @@ export const FAC_FALLBACK: Record<string, string> = {
   farmland: '农田',
   academy: '学堂',
 };
-
-

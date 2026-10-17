@@ -164,7 +164,7 @@ export class TaskBoard {
       } else {
         el.classList.add('draggable');
         el.draggable = true;
-        distEl.innerHTML = `<span>路程 ${dist} 格</span><span>赶路 ${fmtDur(travelSec)}</span>`;
+        distEl.innerHTML = `<span>路程 ${dist} 单位</span><span>赶路 ${fmtDur(travelSec)}</span>`;
       }
     }
 

@@ -1,6 +1,5 @@
 import {
   ATTR_KEYS,
-  type Cell,
   type GameConfig,
   type GameState,
 } from './types';
@@ -12,11 +11,6 @@ import { ensureRelations, GENERALS } from './generals';
 import { emitEvent } from './events';
 import { ensureEventFields } from './event';
 import { syncStandings } from './classSystem';
-
-/** 出生在州府 2×2 的哪一格：固定取「最左上」一格，避免随机导致存档不一致（D1） */
-export function pickSpawnCell(nodeCells: Cell[]): Cell {
-  return [...nodeCells].sort((a, b) => (a.y - b.y) || (a.x - b.x))[0];
-}
 
 export function createInitialState(cfg: GameConfig, now: number, seed = 0): GameState {
   const state: GameState = {
@@ -65,8 +59,8 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
     doneEvents: [],
     stats: {
       tasksDone: 0,
-      returnTrips: 0,
-      cellsWalked: 0,
+      deposits: 0,
+      distanceWalked: 0,
       itemsGained: {},
       startedAt: now,
       evalTally: [0, 0, 0, 0],
@@ -98,13 +92,9 @@ export function createInitialState(cfg: GameConfig, now: number, seed = 0): Game
   const cityTag = pickOne(state, candidates.length ? candidates : cfg.cities.map((c) => c.tag)) ?? cfg.cities[0]?.tag ?? '';
   state.startCity = cityTag;
   state.visitedCities.push(cityTag); // 出生地视为已造访，不再触发"到达新城市"
-  // 向量地图：出生点用城市离散坐标中心；否则用格子城块（最左上格）
+  // 出生点 = 城市离散坐标中心（坐标模式唯一口径）
   const cp = cfg.cityPointByTag[cityTag];
   if (cp) state.cell = { x: cp.x, y: cp.y };
-  else {
-    const cityNode = cfg.nodes.find((n) => n.belong === cityTag && n.name === 'city');
-    if (cityNode) state.cell = pickSpawnCell(cityNode.cells);
-  }
 
   // 四维初始 2–5 随机
   for (const key of ATTR_KEYS) {
@@ -145,7 +135,20 @@ export function ensureRuntimeFields(state: GameState, cfg: GameConfig): void {
   if (state.pace !== 'steady' && state.pace !== 'mid' && state.pace !== 'bold') {
     state.pace = 'mid';
   }
-  if (!state.stats) state.stats = { tasksDone: 0, returnTrips: 0, cellsWalked: 0, itemsGained: {}, startedAt: Date.now() } as GameState['stats'];
+  if (!state.stats) state.stats = { tasksDone: 0, deposits: 0, distanceWalked: 0, itemsGained: {}, startedAt: Date.now() } as GameState['stats'];
+  // 2026-10-14 字段改名：cellsWalked（格子时代「走了几格」）→ distanceWalked（坐标模式欧氏距离）。
+  // 同版本旧存档里旧键还有值，迁过来后再清掉，避免统计归零。
+  if (typeof state.stats.distanceWalked !== 'number') {
+    const legacy = (state.stats as { cellsWalked?: number }).cellsWalked;
+    state.stats.distanceWalked = typeof legacy === 'number' && Number.isFinite(legacy) ? legacy : 0;
+    delete (state.stats as { cellsWalked?: number }).cellsWalked;
+  }
+  // 2026-10-14 字段改名：returnTrips（回城次数，回城跑路逻辑已删）→ deposits（背包满自动入仓次数）。
+  if (typeof state.stats.deposits !== 'number') {
+    const legacy = (state.stats as { returnTrips?: number }).returnTrips;
+    state.stats.deposits = typeof legacy === 'number' && Number.isFinite(legacy) ? legacy : 0;
+    delete (state.stats as { returnTrips?: number }).returnTrips;
+  }
   if (!Array.isArray(state.stats.evalTally) || state.stats.evalTally.length !== 4) state.stats.evalTally = [0, 0, 0, 0];
   if (typeof state.stats.starvedTasks !== 'number') state.stats.starvedTasks = 0;
   if (typeof state.stats.starvedMat !== 'number') state.stats.starvedMat = 0;
